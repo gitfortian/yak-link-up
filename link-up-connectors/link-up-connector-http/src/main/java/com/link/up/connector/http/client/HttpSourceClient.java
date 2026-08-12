@@ -119,13 +119,19 @@ public final class HttpSourceClient implements AutoCloseable {
             requestBuilder.get();
         }
 
+        LOG.debug("HTTP {} {}", method, url);
+
         try (Response response = httpClient.newCall(requestBuilder.build()).execute()) {
             if (!response.isSuccessful()) {
+                LOG.warn("HTTP request failed: status={}, url={}", response.code(), url);
                 throw new IOException("HTTP request failed with status " + response.code()
                         + " for URL: " + url);
             }
             ResponseBody responseBody = response.body();
-            return responseBody != null ? responseBody.string() : "";
+            String body = responseBody != null ? responseBody.string() : "";
+            LOG.debug("HTTP response: status={}, bodyLength={}",
+                    response.code(), body.length());
+            return body;
         }
     }
 

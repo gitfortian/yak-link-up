@@ -8,19 +8,18 @@ import com.link.up.api.factory.SourceFactory;
 import com.link.up.api.source.Source;
 import com.link.up.api.source.SourceFactoryContext;
 import com.link.up.api.source.SourceSplit;
+import com.link.up.api.table.catalog.Catalog;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
-import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.factory.TableSourceFactory;
+import com.link.up.connector.http.catalog.HttpCatalog;
+import com.link.up.connector.http.catalog.HttpCatalogConfig;
 import com.link.up.connector.http.config.HttpSourceConfig;
 import com.link.up.connector.http.config.HttpSourceOptions;
-import com.link.up.connector.http.schema.HttpSchemaParser;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -50,7 +49,7 @@ public final class HttpSourceFactory
     public Set<ConnectorCapability> capabilities() {
         return Collections.unmodifiableSet(
                 EnumSet.of(
-                        ConnectorCapability.CUSTOM_SQL));
+                        ConnectorCapability.TABLE_SCHEMA_DISCOVERY));
     }
 
     @Override
@@ -65,25 +64,26 @@ public final class HttpSourceFactory
     public List<CatalogTable> discoverTableSchemas(
             SourceFactoryContext context) throws Exception {
 
-        HttpSourceConfig config = createConfig(context);
+        HttpSourceConfig sourceConfig = createConfig(context);
 
-        Map<String, Object> schemaFields = config.getSchemaFields();
-        if (schemaFields == null || schemaFields.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "HTTP Source requires 'schema.fields' to define the output schema");
+        HttpCatalogConfig catalogConfig =
+                HttpCatalogConfig.fromSourceConfig(sourceConfig);
+
+        try (Catalog catalog = new HttpCatalog(catalogConfig)) {
+            catalog.open();
+
+            List<TablePath> tablePaths =
+                    catalog.listTables(null, null);
+
+            if (tablePaths.isEmpty()) {
+                return Collections.emptyList();
+            }
+
+            TablePath tablePath = tablePaths.get(0);
+            CatalogTable table = catalog.getTable(tablePath);
+
+            return Collections.singletonList(table);
         }
-
-        TableSchema schema = HttpSchemaParser.parse(schemaFields);
-
-        CatalogTable table = CatalogTable.builder(
-                        TablePath.of("http"),
-                        schema)
-                .comment("HTTP Source")
-                .build();
-
-        List<CatalogTable> result = new ArrayList<>(1);
-        result.add(table);
-        return Collections.unmodifiableList(result);
     }
 
     @Override
