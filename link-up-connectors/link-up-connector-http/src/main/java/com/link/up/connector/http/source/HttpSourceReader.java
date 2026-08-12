@@ -1,12 +1,5 @@
 package com.link.up.connector.http.source;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jayway.jsonpath.Configuration;
-import com.jayway.jsonpath.JsonPath;
-import com.jayway.jsonpath.Option;
-import com.jayway.jsonpath.spi.json.JacksonJsonNodeJsonProvider;
-import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import com.link.up.api.source.RecordBatch;
 import com.link.up.api.source.SourceReader;
 import com.link.up.api.table.catalog.CatalogTable;
@@ -41,15 +34,6 @@ public final class HttpSourceReader
 
     private static final Logger LOG =
             LoggerFactory.getLogger(HttpSourceReader.class);
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    private static final Configuration JSON_PATH_CONFIG =
-            Configuration.builder()
-                    .jsonProvider(new JacksonJsonNodeJsonProvider())
-                    .mappingProvider(new JacksonMappingProvider())
-                    .options(Option.SUPPRESS_EXCEPTIONS)
-                    .build();
 
     private final HttpSourceConfig config;
     private final CatalogTable catalogTable;
@@ -179,9 +163,9 @@ public final class HttpSourceReader
         String pageValue = String.valueOf(currentPage);
 
         if (config.isUsePlaceholderReplacement()) {
-            // 占位符替换模式：替换 headers、body 中的 ${page}
+            // 占位符替换模式：替换 headers、params、body 中的 ${page}
             replacePlaceholder(headers, pageField, pageValue);
-            replacePlaceholderInMap(params, pageField, pageValue);
+            replacePlaceholder(params, pageField, pageValue);
         } else {
             // key-based 模式：直接设置参数值
             params.put(pageField, pageValue);
@@ -195,7 +179,7 @@ public final class HttpSourceReader
         if (currentCursor != null && config.getCursorField() != null) {
             if (config.isUsePlaceholderReplacement()) {
                 replacePlaceholder(headers, config.getCursorField(), currentCursor);
-                replacePlaceholderInMap(params, config.getCursorField(), currentCursor);
+                replacePlaceholder(params, config.getCursorField(), currentCursor);
             } else {
                 params.put(config.getCursorField(), currentCursor);
             }
@@ -214,77 +198,70 @@ public final class HttpSourceReader
         long totalPageSize = config.getTotalPageSize();
 
         if (totalPageSize > 0) {
-            // 已知总页数
             if (currentPage >= totalPageSize + config.getStartPageNumber() - 1) {
+                LOG.info("分页结束：已达总页数={}, 当前页={}",
+                        totalPageSize, currentPage);
                 paginationExhausted = true;
                 return;
             }
         } else {
-            // 未知总页数，根据返回行数判断
             if (rowCount < config.getPageBatchSize()) {
+                LOG.info("分页结束：返回行数={} < batch_size={}, 当前页={}",
+                        rowCount, config.getPageBatchSize(), currentPage);
                 paginationExhausted = true;
                 return;
             }
         }
 
         currentPage++;
+        LOG.debug("翻页至 page={}", currentPage);
     }
 
     private void advanceCursorPagination(String responseBody) {
-        if (config.getCursorResponseField() == null || config.getCursorResponseField().isEmpty()) {
+        if (config.getCursorResponseField() == null
+                || config.getCursorResponseField().isEmpty()) {
+            LOG.info("Cursor 分页结束：未配置 cursor_response_field");
             paginationExhausted = true;
             return;
         }
 
         try {
-            JsonNode root = MAPPER.readTree(responseBody);
-            String normalizedPath = config.getCursorResponseField()
-                    .replaceAll("\\.\\*", "[*]");
-            Object result = JsonPath.using(JSON_PATH_CONFIG).parse(root).read(normalizedPath);
+            String cursorValue = HttpResponseParser.extractSingleStringValue(
+                    responseBody,
+                    config.getCursorResponseField());
 
-            if (result == null) {
-                paginationExhausted = true;
-                return;
-            }
-
-            String cursorValue;
-            if (result instanceof JsonNode) {
-                JsonNode node = (JsonNode) result;
-                if (node.isNull() || node.isMissingNode()) {
-                    paginationExhausted = true;
-                    return;
-                }
-                cursorValue = node.isTextual() ? node.asText() : node.toString();
-            } else {
-                cursorValue = String.valueOf(result);
-            }
-
-            if (cursorValue.isEmpty() || "null".equals(cursorValue)) {
+            if (cursorValue == null
+                    || cursorValue.isEmpty()
+                    || "null".equals(cursorValue)) {
+                LOG.info("Cursor 分页结束：响应中未找到有效游标值");
                 paginationExhausted = true;
                 return;
             }
 
             currentCursor = cursorValue;
+            LOG.debug("Cursor 更新为: {}", currentCursor);
         } catch (Exception e) {
-            LOG.warn("Failed to extract cursor from response, pagination ended: {}", e.getMessage());
+            LOG.warn("提取游标值失败，分页结束: {}", e.getMessage());
             paginationExhausted = true;
         }
     }
 
-    // ── 占位符替换 ──────────────────────────────────────────────────────
+    // ── 占位符替换 ──────────────────────────────────────────
 
-    private static void replacePlaceholder(Map<String, String> map, String field, String value) {
-        if (map == null) return;
+    private static void replacePlaceholder(
+            Map<String, String> map,
+            String field,
+            String value) {
+
+        if (map == null) {
+            return;
+        }
         for (Map.Entry<String, String> entry : map.entrySet()) {
             String v = entry.getValue();
             if (v != null && v.contains("${" + field + "}")) {
                 entry.setValue(v.replace("${" + field + "}", value));
             }
         }
-    }
-
-    private static void replacePlaceholderInMap(Map<String, String> map, String field, String value) {
-        replacePlaceholder(map, field, value);
     }
 
     @Override

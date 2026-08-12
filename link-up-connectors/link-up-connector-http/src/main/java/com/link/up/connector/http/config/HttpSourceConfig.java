@@ -68,6 +68,28 @@ public final class HttpSourceConfig {
         this.socketTimeoutMs = builder.socketTimeoutMs;
         this.enableMultiLines = builder.enableMultiLines;
         this.jsonFieldMissedReturnNull = builder.jsonFieldMissedReturnNull;
+
+        validatePagination();
+    }
+
+    /**
+     * 校验分页配置一致性。
+     */
+    private void validatePagination() {
+        if (!hasPagination()) {
+            return;
+        }
+
+        if (pageType == PageType.CURSOR) {
+            if (cursorField == null || cursorField.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Cursor 分页模式必须配置 'pageing.cursor_field'");
+            }
+            if (cursorResponseField == null || cursorResponseField.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Cursor 分页模式必须配置 'pageing.cursor_response_field'");
+            }
+        }
     }
 
     public static HttpSourceConfig of(ReadonlyConfig options) {
@@ -117,7 +139,7 @@ public final class HttpSourceConfig {
         return pageField != null && !pageField.isEmpty();
     }
 
-    // ── Getters ──────────────────────────────────────────────────
+    // ── Getters ──────────────────────────────────────────
 
     public String getUrl() { return url; }
     public HttpMethod getMethod() { return method; }
