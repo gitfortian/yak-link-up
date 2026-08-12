@@ -116,21 +116,65 @@ public final class HttpCatalogConfig {
 
     // ── Getters ──────────────────────────────────────────
 
-    public String getUrl() { return url; }
-    public HttpMethod getMethod() { return method; }
-    public Map<String, String> getHeaders() { return headers; }
-    public Map<String, String> getParams() { return params; }
-    public String getBody() { return body; }
-    public HttpFormat getFormat() { return format; }
-    public Map<String, Object> getSchemaFields() { return schemaFields; }
-    public String getContentField() { return contentField; }
-    public Map<String, Object> getJsonField() { return jsonField; }
-    public int getConnectTimeoutMs() { return connectTimeoutMs; }
-    public int getSocketTimeoutMs() { return socketTimeoutMs; }
-    public int getRetry() { return retry; }
-    public int getRetryBackoffMultiplierMs() { return retryBackoffMultiplierMs; }
-    public int getRetryBackoffMaxMs() { return retryBackoffMaxMs; }
-    public String getTableName() { return tableName; }
+    public String getUrl() {
+        return url;
+    }
+
+    public HttpMethod getMethod() {
+        return method;
+    }
+
+    public Map<String, String> getHeaders() {
+        return headers;
+    }
+
+    public Map<String, String> getParams() {
+        return params;
+    }
+
+    public String getBody() {
+        return body;
+    }
+
+    public HttpFormat getFormat() {
+        return format;
+    }
+
+    public Map<String, Object> getSchemaFields() {
+        return schemaFields;
+    }
+
+    public String getContentField() {
+        return contentField;
+    }
+
+    public Map<String, Object> getJsonField() {
+        return jsonField;
+    }
+
+    public int getConnectTimeoutMs() {
+        return connectTimeoutMs;
+    }
+
+    public int getSocketTimeoutMs() {
+        return socketTimeoutMs;
+    }
+
+    public int getRetry() {
+        return retry;
+    }
+
+    public int getRetryBackoffMultiplierMs() {
+        return retryBackoffMultiplierMs;
+    }
+
+    public int getRetryBackoffMaxMs() {
+        return retryBackoffMaxMs;
+    }
+
+    public String getTableName() {
+        return tableName;
+    }
 
     public boolean hasSchemaFields() {
         return schemaFields != null && !schemaFields.isEmpty();
@@ -159,6 +203,7 @@ public final class HttpCatalogConfig {
     }
 
     public static final class Builder {
+
         private String url;
         private HttpMethod method = HttpMethod.GET;
         private Map<String, String> headers = Collections.emptyMap();
@@ -173,23 +218,82 @@ public final class HttpCatalogConfig {
         private int retry = 3;
         private int retryBackoffMultiplierMs = 100;
         private int retryBackoffMaxMs = 10000;
-        private String tableName = "http_source";
+        private String tableName;
 
-        public Builder url(String url) { this.url = url; return this; }
-        public Builder method(HttpMethod method) { this.method = method; return this; }
-        public Builder headers(Map<String, String> headers) { this.headers = headers; return this; }
-        public Builder params(Map<String, String> params) { this.params = params; return this; }
-        public Builder body(String body) { this.body = body; return this; }
-        public Builder format(HttpFormat format) { this.format = format; return this; }
-        public Builder schemaFields(Map<String, Object> schemaFields) { this.schemaFields = schemaFields; return this; }
-        public Builder contentField(String contentField) { this.contentField = contentField; return this; }
-        public Builder jsonField(Map<String, Object> jsonField) { this.jsonField = jsonField; return this; }
-        public Builder connectTimeoutMs(int v) { this.connectTimeoutMs = v; return this; }
-        public Builder socketTimeoutMs(int v) { this.socketTimeoutMs = v; return this; }
-        public Builder retry(int retry) { this.retry = retry; return this; }
-        public Builder retryBackoffMultiplierMs(int v) { this.retryBackoffMultiplierMs = v; return this; }
-        public Builder retryBackoffMaxMs(int v) { this.retryBackoffMaxMs = v; return this; }
-        public Builder tableName(String tableName) { this.tableName = tableName; return this; }
+        public Builder url(String url) {
+            this.url = url;
+            return this;
+        }
+
+        public Builder method(HttpMethod method) {
+            this.method = method;
+            return this;
+        }
+
+        public Builder headers(Map<String, String> headers) {
+            this.headers = headers;
+            return this;
+        }
+
+        public Builder params(Map<String, String> params) {
+            this.params = params;
+            return this;
+        }
+
+        public Builder body(String body) {
+            this.body = body;
+            return this;
+        }
+
+        public Builder format(HttpFormat format) {
+            this.format = format;
+            return this;
+        }
+
+        public Builder schemaFields(Map<String, Object> schemaFields) {
+            this.schemaFields = schemaFields;
+            return this;
+        }
+
+        public Builder contentField(String contentField) {
+            this.contentField = contentField;
+            return this;
+        }
+
+        public Builder jsonField(Map<String, Object> jsonField) {
+            this.jsonField = jsonField;
+            return this;
+        }
+
+        public Builder connectTimeoutMs(int connectTimeoutMs) {
+            this.connectTimeoutMs = connectTimeoutMs;
+            return this;
+        }
+
+        public Builder socketTimeoutMs(int socketTimeoutMs) {
+            this.socketTimeoutMs = socketTimeoutMs;
+            return this;
+        }
+
+        public Builder retry(int retry) {
+            this.retry = retry;
+            return this;
+        }
+
+        public Builder retryBackoffMultiplierMs(int retryBackoffMultiplierMs) {
+            this.retryBackoffMultiplierMs = retryBackoffMultiplierMs;
+            return this;
+        }
+
+        public Builder retryBackoffMaxMs(int retryBackoffMaxMs) {
+            this.retryBackoffMaxMs = retryBackoffMaxMs;
+            return this;
+        }
+
+        public Builder tableName(String tableName) {
+            this.tableName = tableName;
+            return this;
+        }
 
         public HttpCatalogConfig build() {
             return new HttpCatalogConfig(this);
