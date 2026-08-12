@@ -47,7 +47,7 @@ public final class HttpCatalog implements Catalog {
 
     private static final String CATALOG_NAME = "http";
     private static final String DEFAULT_DATABASE = "default";
-    private static final String DEFAULT_TABLE_NAME = "http_source";
+    private static final String DEFAULT_TABLE_NAME = "default";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 

@@ -13,7 +13,7 @@ public final class HttpSourceSplit implements SourceSplit {
     private static final long serialVersionUID = 1L;
 
     private static final String SPLIT_ID = "http-split-0";
-    private static final String DATASET_ID = "http";
+    private static final String DATASET_ID = "default.default";
 
     @Override
     public String splitId() {
