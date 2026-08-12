@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * HTTP 响应解析器。
@@ -74,7 +75,7 @@ public final class HttpResponseParser {
         return parseByContentField(responseBody, config, schema);
     }
 
-    // ── TEXT 格式 ──────────────────────────────────────────────────
+    // ── TEXT 格式 ──────────────────────────────────────────
 
     private static List<FluxRow> parseTextResponse(
             String responseBody,
@@ -99,7 +100,7 @@ public final class HttpResponseParser {
         return Collections.singletonList(FluxRow.of(responseBody));
     }
 
-    // ── JSON content_field 模式 ──────────────────────────────────────────
+    // ── JSON content_field 模式 ──────────────────────────────
 
     private static List<FluxRow> parseByContentField(
             String responseBody,
@@ -138,7 +139,7 @@ public final class HttpResponseParser {
         return Collections.singletonList(FluxRow.of(jsonNodeToJavaValue(dataNode)));
     }
 
-    // ── JSON json_field 模式 ─────────────────────────────────────────────
+    // ── JSON json_field 模式 ─────────────────────────────────
 
     private static List<FluxRow> parseByJsonField(
             String responseBody,
@@ -151,7 +152,7 @@ public final class HttpResponseParser {
         // 每个字段提取值列表
         List<String> fieldNames = schema.getColumns().stream()
                 .map(Column::getName)
-                .collect(java.util.stream.Collectors.toList());
+                .collect(Collectors.toList());
 
         List<List<Object>> fieldValues = new ArrayList<>(fieldNames.size());
         int maxLen = 0;
@@ -191,7 +192,43 @@ public final class HttpResponseParser {
         return rows;
     }
 
-    // ── JsonPath 工具 ──────────────────────────────────────────────────
+    /**
+     * 从 JSON 响应中提取单个字符串值。
+     *
+     * <p>用于 Cursor 分页时从响应中提取游标值。
+     *
+     * @param responseBody JSON 响应体
+     * @param jsonPath     JsonPath 表达式
+     * @return 提取的字符串值，未找到时返回 null
+     */
+    public static String extractSingleStringValue(
+            String responseBody,
+            String jsonPath) throws Exception {
+
+        if (responseBody == null || jsonPath == null) {
+            return null;
+        }
+
+        JsonNode root = MAPPER.readTree(responseBody);
+        String normalized = normalizeJsonPath(jsonPath);
+        Object result = JsonPath.using(JSON_PATH_CONFIG).parse(root).read(normalized);
+
+        if (result == null) {
+            return null;
+        }
+
+        if (result instanceof JsonNode) {
+            JsonNode node = (JsonNode) result;
+            if (node.isNull() || node.isMissingNode()) {
+                return null;
+            }
+            return node.isTextual() ? node.asText() : node.toString();
+        }
+
+        return String.valueOf(result);
+    }
+
+    // ── JsonPath 工具 ──────────────────────────────────────────
 
     private static JsonNode evaluateJsonPath(JsonNode root, String jsonPath) {
         String normalized = normalizeJsonPath(jsonPath);
@@ -260,7 +297,7 @@ public final class HttpResponseParser {
         return path.replaceAll("\\.\\*", "[*]");
     }
 
-    // ── JSON → FluxRow 映射 ──────────────────────────────────────────────
+    // ── JSON → FluxRow 映射 ──────────────────────────────────
 
     private static FluxRow mapJsonNodeToRow(
             JsonNode node,
@@ -288,7 +325,7 @@ public final class HttpResponseParser {
         return row;
     }
 
-    // ── 类型转换 ──────────────────────────────────────────────────────
+    // ── 类型转换 ──────────────────────────────────────────
 
     private static Object jsonNodeToJavaValue(JsonNode node) {
         if (node == null || node.isNull() || node.isMissingNode()) {
@@ -311,7 +348,7 @@ public final class HttpResponseParser {
         return node.toString();
     }
 
-    static Object convertValue(Object value, Column column) {
+    private static Object convertValue(Object value, Column column) {
         if (value == null) {
             return null;
         }
