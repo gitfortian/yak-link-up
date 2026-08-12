@@ -6,7 +6,7 @@
 
     <parent>
         <groupId>com.link.up</groupId>
-        <artifactId>link-up</artifactId>
+        <artifactId>link-up-connectors</artifactId>
         <version>1.0.0</version>
     </parent>
 
@@ -16,6 +16,7 @@
 
     <modules>
         <module>link-up-connector-jdbc</module>
+        <module>link-up-connector-doris</module>
     </modules>
 
 </project>
