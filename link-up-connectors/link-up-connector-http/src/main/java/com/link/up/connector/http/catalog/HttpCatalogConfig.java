@@ -218,7 +218,7 @@ public final class HttpCatalogConfig {
         private int retry = 3;
         private int retryBackoffMultiplierMs = 100;
         private int retryBackoffMaxMs = 10000;
-        private String tableName = "http_source";
+        private String tableName;
 
         public Builder url(String url) {
             this.url = url;
