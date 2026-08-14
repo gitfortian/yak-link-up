@@ -1,7 +1,11 @@
 package com.link.up.connector.doris.sink;
 
-import com.link.up.api.configuration.ReadonlyConfig;
+import com.link.up.api.dirtydata.DirtyDataCollector;
+import com.link.up.api.dirtydata.DirtyDataContext;
+import com.link.up.api.dirtydata.DirtyDataSummary;
+import com.link.up.api.dirtydata.DirtyRecord;
 import com.link.up.api.sink.CommitScope;
+import com.link.up.api.sink.DirtyDataAwareSinkWriter;
 import com.link.up.api.sink.PreparedSinkMetadata;
 import com.link.up.api.sink.SinkWriter;
 import com.link.up.api.source.RecordBatch;
@@ -34,7 +38,7 @@ import java.util.Objects;
  *       所有数据写入完成后在 {@link #commit()} 中统一提交，实现 exactly-once 语义。</li>
  * </ul>
  */
-public final class DorisSinkWriter implements SinkWriter<FluxRow> {
+public final class DorisSinkWriter implements SinkWriter<FluxRow>, DirtyDataAwareSinkWriter {
 
     private static final Logger LOG =
             LoggerFactory.getLogger(DorisSinkWriter.class);
@@ -45,6 +49,7 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow> {
     private final List<FluxRow> buffer = new ArrayList<>();
     private final boolean enable2pc;
     private TableSchema schema;
+    private DorisRowSerializer serializer;
 
     /**
      * 2PC 模式下收集的待提交事务 ID。
@@ -56,6 +61,10 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow> {
 
     private long totalWrittenRows = 0;
     private long totalLoadRequests = 0;
+    private long totalFilteredRows = 0;
+
+    private DirtyDataCollector dirtyDataCollector;
+    private DirtyDataContext dirtyDataContext;
 
     public DorisSinkWriter(DorisSinkConfig config, PreparedSinkMetadata metadata) {
         this.config = Objects.requireNonNull(config, "config must not be null");
@@ -69,6 +78,9 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow> {
         LOG.info("Doris SinkWriter opened: database={}, table={}, batchSize={}, format={}, 2pc={}",
                 config.getDatabase(), config.getTable(),
                 config.getBatchSize(), config.getLoadFormat(), enable2pc);
+        if (dirtyDataCollector != null) {
+            dirtyDataCollector.open();
+        }
     }
 
     @Override
@@ -164,10 +176,20 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow> {
                 flush();
             }
         } finally {
-            client.close();
+            try {
+                client.close();
+            } finally {
+                if (dirtyDataCollector != null) {
+                    try {
+                        dirtyDataCollector.close(true);
+                    } catch (Exception e) {
+                        LOG.warn("Failed to close dirty data collector", e);
+                    }
+                }
+            }
         }
-        LOG.info("Doris SinkWriter closed: totalWrittenRows={}, totalLoadRequests={}, 2pc={}",
-                totalWrittenRows, totalLoadRequests, enable2pc);
+        LOG.info("Doris SinkWriter closed: totalWrittenRows={}, totalLoadRequests={}, totalFilteredRows={}, 2pc={}",
+                totalWrittenRows, totalLoadRequests, totalFilteredRows, enable2pc);
     }
 
     /**
@@ -184,7 +206,9 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow> {
                             + "Ensure at least one write() call provides a CatalogTable with schema.");
         }
 
-        DorisRowSerializer serializer = new DorisRowSerializer(config, schema);
+        if (serializer == null) {
+            serializer = new DorisRowSerializer(config, schema);
+        }
         String data = serializer.serialize(buffer);
 
         LOG.debug("Flushing {} rows via Stream Load, data size={} bytes",
@@ -201,8 +225,29 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow> {
                 response.getTxnId(), response.getTxnState());
 
         if (response.getNumberFilteredRows() > 0) {
+            totalFilteredRows += response.getNumberFilteredRows();
             LOG.warn("Stream Load filtered {} rows, message: {}",
                     response.getNumberFilteredRows(), response.getMessage());
+
+            // 记录到 DirtyData 收集器
+            if (dirtyDataCollector != null) {
+                try {
+                    dirtyDataCollector.recordAttempt(buffer.size());
+                    String errorMsg = "Doris Stream Load filtered " + response.getNumberFilteredRows()
+                            + " rows: " + response.getMessage();
+                    if (response.getBody() != null && response.getBody().contains("ErrorURL")) {
+                        errorMsg += ", check ErrorURL for details";
+                    }
+                    DirtyRecord dirtyRecord = new DirtyRecord(
+                            "STREAM_LOAD_FILTERED",
+                            errorMsg,
+                            dirtyDataContext,
+                            System.currentTimeMillis());
+                    dirtyDataCollector.collect(dirtyRecord);
+                } catch (Exception e) {
+                    LOG.error("Failed to record dirty data", e);
+                }
+            }
         }
 
         // 2PC 模式：收集事务 ID，等待 commit() 时统一提交
@@ -225,5 +270,23 @@ public final class DorisSinkWriter implements SinkWriter<FluxRow> {
         }
 
         buffer.clear();
+    }
+
+    // ── DirtyData 支持 ─────────────────────────────────────
+
+    @Override
+    public void configureDirtyData(DirtyDataContext context) throws Exception {
+        this.dirtyDataContext = context;
+        // 默认使用 BoundedMemory 收集器，用户可通过框架配置切换
+        this.dirtyDataCollector = new com.link.up.api.dirtydata.BoundedMemoryDirtyDataCollector(
+                context.getTaskId(), 100, 1000, 0.1);
+    }
+
+    @Override
+    public DirtyDataSummary getDirtyDataSummary() {
+        if (dirtyDataCollector != null) {
+            return dirtyDataCollector.summary();
+        }
+        return DirtyDataSummary.empty();
     }
 }

@@ -1,5 +1,7 @@
 package com.link.up.connector.doris.client;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.up.connector.doris.config.DorisLoadFormat;
 import com.link.up.connector.doris.config.DorisSinkConfig;
 import okhttp3.MediaType;
@@ -12,7 +14,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +36,10 @@ public final class DorisStreamLoadClient implements AutoCloseable {
 
     private static final MediaType TEXT_PLAIN =
             MediaType.parse("text/plain; charset=utf-8");
+
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+
+    private static final int MAX_REDIRECTS = 3;
 
     private final DorisSinkConfig config;
     private final OkHttpClient httpClient;
@@ -109,6 +114,15 @@ public final class DorisStreamLoadClient implements AutoCloseable {
     }
 
     private StreamLoadResponse doLoad(Request request) throws IOException {
+        return doLoadWithRedirect(request, 0);
+    }
+
+    private StreamLoadResponse doLoadWithRedirect(Request request, int redirectCount)
+            throws IOException {
+        if (redirectCount > MAX_REDIRECTS) {
+            throw new IOException("Stream Load 重定向次数超过上限 (" + MAX_REDIRECTS + ")");
+        }
+
         try (Response response = httpClient.newCall(request).execute()) {
             String body = response.body() != null ? response.body().string() : "";
 
@@ -116,23 +130,27 @@ public final class DorisStreamLoadClient implements AutoCloseable {
             if (response.code() == 307) {
                 String redirectUrl = response.header("Location");
                 if (redirectUrl != null && !redirectUrl.isEmpty()) {
-                    LOG.debug("Stream Load redirect to {}", redirectUrl);
-                    return doRedirect(request, redirectUrl);
+                    LOG.debug("Stream Load redirect to {} (count={})", redirectUrl, redirectCount + 1);
+                    Request redirectRequest = request.newBuilder().url(redirectUrl).build();
+                    return doLoadWithRedirect(redirectRequest, redirectCount + 1);
                 }
             }
 
-            return StreamLoadResponse.parse(response.code(), body);
-        }
-    }
+            // 检查 HTTP 错误码，区分可重试和不可重试异常
+            if (!response.isSuccessful()) {
+                if (response.code() == 401 || response.code() == 403) {
+                    throw new IOException("Doris Stream Load 认证失败: httpStatus=" + response.code()
+                            + ", body=" + body);
+                }
+                if (response.code() >= 400 && response.code() < 500) {
+                    throw new IOException("Doris Stream Load 客户端错误: httpStatus=" + response.code()
+                            + ", body=" + body);
+                }
+                // 5xx 服务端错误，可重试
+                throw new IOException("Doris Stream Load 服务端错误: httpStatus=" + response.code()
+                        + ", body=" + body);
+            }
 
-    private StreamLoadResponse doRedirect(Request originalRequest, String redirectUrl)
-            throws IOException {
-
-        Request.Builder redirectBuilder = originalRequest.newBuilder()
-                .url(redirectUrl);
-
-        try (Response response = httpClient.newCall(redirectBuilder.build()).execute()) {
-            String body = response.body() != null ? response.body().string() : "";
             return StreamLoadResponse.parse(response.code(), body);
         }
     }
@@ -164,7 +182,7 @@ public final class DorisStreamLoadClient implements AutoCloseable {
         Map<String, String> headers = new LinkedHashMap<>();
 
         // Basic Auth
-        String credentials = config.getUsername() + ":" + config.getPassword();
+        String credentials = config.getUsername() + ":" + (config.getPassword() != null ? config.getPassword() : "");
         String encoded = Base64.getEncoder().encodeToString(
                 credentials.getBytes(StandardCharsets.UTF_8));
         headers.put("Authorization", "Basic " + encoded);
@@ -192,7 +210,85 @@ public final class DorisStreamLoadClient implements AutoCloseable {
             headers.put("two_phase_commit", "true");
         }
 
-        // 透传 doris.config
+        // ── Stream Load 扩展参数 ──────────────────────────
+
+        // 超时
+        if (config.getLoadTimeoutSec() > 0) {
+            headers.put("timeout", String.valueOf(config.getLoadTimeoutSec()));
+        }
+
+        // 最大容错率
+        if (config.getMaxFilterRatio() > 0) {
+            headers.put("max_filter_ratio", String.valueOf(config.getMaxFilterRatio()));
+        }
+
+        // 列映射
+        addHeaderIfPresent(headers, "columns", config.getColumns());
+
+        // 过滤条件
+        addHeaderIfPresent(headers, "where", config.getWhere());
+
+        // 分区
+        addHeaderIfPresent(headers, "partitions", config.getPartitions());
+
+        // 严格模式
+        if (config.isStrictMode()) {
+            headers.put("strict_mode", "true");
+        }
+
+        // 时区
+        addHeaderIfPresent(headers, "timezone", config.getTimezone());
+
+        // 内存限制
+        if (config.getExecMemLimit() > 0) {
+            headers.put("exec_mem_limit", String.valueOf(config.getExecMemLimit()));
+        }
+
+        // JSON 相关参数
+        addHeaderIfPresent(headers, "jsonpaths", config.getJsonpaths());
+        if (config.isStripOuterArray()) {
+            headers.put("strip_outer_array", "true");
+        }
+        addHeaderIfPresent(headers, "json_root", config.getJsonRoot());
+        if (config.isNumAsString()) {
+            headers.put("num_as_string", "true");
+        }
+        if (config.isFuzzyParse()) {
+            headers.put("fuzzy_parse", "true");
+        }
+
+        // 发送并行度
+        if (config.getSendBatchParallelism() > 1) {
+            headers.put("send_batch_parallelism", String.valueOf(config.getSendBatchParallelism()));
+        }
+
+        // 单 Tablet 导入
+        if (config.isLoadToSingleTablet()) {
+            headers.put("load_to_single_tablet", "true");
+        }
+
+        // CSV 扩展参数
+        addHeaderIfPresent(headers, "line_delimiter", config.getLineDelimiter());
+        addHeaderIfPresent(headers, "enclose", config.getEnclose());
+        addHeaderIfPresent(headers, "escape", config.getEscape());
+
+        // CSV 压缩格式
+        addHeaderIfPresent(headers, "compress_type", config.getCompressType());
+
+        // CSV 裁剪双引号
+        if (config.isTrimDoubleQuotes()) {
+            headers.put("trim_double_quotes", "true");
+        }
+
+        // CSV 跳过前 N 行
+        if (config.getSkipLines() > 0) {
+            headers.put("skip_lines", String.valueOf(config.getSkipLines()));
+        }
+
+        // 导入备注
+        addHeaderIfPresent(headers, "comment", config.getLoadComment());
+
+        // 透传 doris.config（优先级最高，可覆盖以上参数）
         for (Map.Entry<String, String> entry : config.getDorisConfig().entrySet()) {
             headers.put(entry.getKey(), entry.getValue());
         }
@@ -201,6 +297,12 @@ public final class DorisStreamLoadClient implements AutoCloseable {
         headers.put("Expect", "100-continue");
 
         return headers;
+    }
+
+    private static void addHeaderIfPresent(Map<String, String> headers, String key, String value) {
+        if (value != null && !value.trim().isEmpty()) {
+            headers.put(key, value);
+        }
     }
 
     private String generateLabel() {
@@ -276,7 +378,7 @@ public final class DorisStreamLoadClient implements AutoCloseable {
 
         LOG.debug("2PC {} txnId={} to {}", operation, txnId, url);
 
-        String credentials = config.getUsername() + ":" + config.getPassword();
+        String credentials = config.getUsername() + ":" + (config.getPassword() != null ? config.getPassword() : "");
         String encoded = Base64.getEncoder().encodeToString(
                 credentials.getBytes(StandardCharsets.UTF_8));
 
@@ -298,11 +400,18 @@ public final class DorisStreamLoadClient implements AutoCloseable {
             }
 
             // 检查响应中的 Status 字段
-            String status = StreamLoadResponse.extractJsonStringStatic(responseBody, "status");
-            if (status != null && !"OK".equalsIgnoreCase(status) && !"Success".equalsIgnoreCase(status)) {
-                String msg = StreamLoadResponse.extractJsonStringStatic(responseBody, "message");
-                throw new IOException("Doris 2PC " + operation + " failed: txnId=" + txnId
-                        + ", status=" + status + ", message=" + msg);
+            try {
+                JsonNode root = JSON_MAPPER.readTree(responseBody);
+                String status = root.has("status") ? root.get("status").asText() : null;
+                if (status != null && !"OK".equalsIgnoreCase(status) && !"Success".equalsIgnoreCase(status)) {
+                    String msg = root.has("message") ? root.get("message").asText() : null;
+                    throw new IOException("Doris 2PC " + operation + " failed: txnId=" + txnId
+                            + ", status=" + status + ", message=" + msg);
+                }
+            } catch (IOException e) {
+                throw e;
+            } catch (Exception e) {
+                LOG.warn("Failed to parse 2PC response JSON, body={}", responseBody, e);
             }
 
             LOG.debug("2PC {} txnId={} success", operation, txnId);
@@ -376,21 +485,44 @@ public final class DorisStreamLoadClient implements AutoCloseable {
          * 需要同时支持字符串和数字两种解析方式。
          */
         public static StreamLoadResponse parse(int httpStatus, String body) {
-            String status = extractJsonString(body, "Status");
-            String message = extractJsonString(body, "Message");
-            long totalRows = extractJsonLong(body, "NumberTotalRows");
-            long loadedRows = extractJsonLong(body, "NumberLoadedRows");
-            long filteredRows = extractJsonLong(body, "NumberFilteredRows");
-            long unselectedRows = extractJsonLong(body, "NumberUnselectedRows");
-            // TxnId 在 Doris 响应中是数字，用 extractJsonLong 解析后转 String
-            long txnIdLong = extractJsonLong(body, "TxnId");
-            String txnId = txnIdLong >= 0 ? String.valueOf(txnIdLong) : extractJsonString(body, "TxnId");
-            String label = extractJsonString(body, "Label");
-            String txnState = extractJsonString(body, "TxnState");
+            try {
+                JsonNode root = JSON_MAPPER.readTree(body);
 
-            return new StreamLoadResponse(httpStatus, body, status, message,
-                    totalRows, loadedRows, filteredRows, unselectedRows,
-                    txnId, label, txnState);
+                String status = getTextValue(root, "Status");
+                String message = getTextValue(root, "Message");
+                long totalRows = getLongValue(root, "NumberTotalRows");
+                long loadedRows = getLongValue(root, "NumberLoadedRows");
+                long filteredRows = getLongValue(root, "NumberFilteredRows");
+                long unselectedRows = getLongValue(root, "NumberUnselectedRows");
+                // TxnId 在 Doris 响应中可能是数字或字符串
+                String txnId = getTextValue(root, "TxnId");
+                if (txnId == null) {
+                    long txnIdLong = getLongValue(root, "TxnId");
+                    txnId = txnIdLong >= 0 ? String.valueOf(txnIdLong) : null;
+                }
+                String label = getTextValue(root, "Label");
+                String txnState = getTextValue(root, "TxnState");
+
+                return new StreamLoadResponse(httpStatus, body, status, message,
+                        totalRows, loadedRows, filteredRows, unselectedRows,
+                        txnId, label, txnState);
+            } catch (Exception e) {
+                LOG.warn("Failed to parse Stream Load response JSON, body={}", body, e);
+                return new StreamLoadResponse(httpStatus, body, null, body,
+                        0, 0, 0, 0, null, null, null);
+            }
+        }
+
+        private static String getTextValue(JsonNode node, String field) {
+            JsonNode child = node.get(field);
+            if (child == null || child.isNull()) return null;
+            return child.isTextual() ? child.asText() : child.toString();
+        }
+
+        private static long getLongValue(JsonNode node, String field) {
+            JsonNode child = node.get(field);
+            if (child == null || child.isNull()) return -1;
+            return child.isNumber() ? child.asLong() : -1;
         }
 
         public boolean isSuccess() {
@@ -425,43 +557,5 @@ public final class DorisStreamLoadClient implements AutoCloseable {
         public String getLabel() { return label; }
         public String getTxnState() { return txnState; }
 
-        // ── JSON 解析工具 ──────────────────────────────────
-
-        static String extractJsonStringStatic(String json, String key) {
-            return extractJsonString(json, key);
-        }
-
-        private static String extractJsonString(String json, String key) {
-            if (json == null || key == null) return null;
-            String searchKey = "\"" + key + "\"";
-            int idx = json.indexOf(searchKey);
-            if (idx < 0) return null;
-            int colonIdx = json.indexOf(':', idx + searchKey.length());
-            if (colonIdx < 0) return null;
-            int startQuote = json.indexOf('"', colonIdx + 1);
-            if (startQuote < 0) return null;
-            int endQuote = json.indexOf('"', startQuote + 1);
-            if (endQuote < 0) return null;
-            return json.substring(startQuote + 1, endQuote);
-        }
-
-        private static long extractJsonLong(String json, String key) {
-            if (json == null || key == null) return -1;
-            String searchKey = "\"" + key + "\"";
-            int idx = json.indexOf(searchKey);
-            if (idx < 0) return -1;
-            int colonIdx = json.indexOf(':', idx + searchKey.length());
-            if (colonIdx < 0) return -1;
-            int start = colonIdx + 1;
-            while (start < json.length() && json.charAt(start) == ' ') start++;
-            int end = start;
-            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) end++;
-            if (end == start) return -1;
-            try {
-                return Long.parseLong(json.substring(start, end));
-            } catch (NumberFormatException e) {
-                return -1;
-            }
-        }
     }
 }

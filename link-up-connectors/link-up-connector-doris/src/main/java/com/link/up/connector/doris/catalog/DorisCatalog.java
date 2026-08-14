@@ -97,7 +97,6 @@ public final class DorisCatalog
                     + "FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
                     + "WHERE TABLE_SCHEMA = ? "
                     + "AND TABLE_NAME = ? "
-                    + "AND CONSTRAINT_NAME = 'PRIMARY' "
                     + "ORDER BY ORDINAL_POSITION";
 
     private final String catalogName;
@@ -742,10 +741,22 @@ public final class DorisCatalog
                         new ArrayList<>();
 
                 while (resultSet.next()) {
+                    String constraintName =
+                            resultSet.getString(
+                                    "CONSTRAINT_NAME");
+
+                    // Doris 主键约束名通常为 'PRIMARY'，
+                    // 但也可能是其他名称，优先匹配 'PRIMARY'，
+                    // 否则取第一个约束。
                     if (primaryKeyName == null) {
-                        primaryKeyName =
-                                resultSet.getString(
-                                        "CONSTRAINT_NAME");
+                        primaryKeyName = constraintName;
+                    }
+
+                    // 如果已找到 PRIMARY 约束，只收集该约束的列
+                    if ("PRIMARY".equalsIgnoreCase(primaryKeyName)) {
+                        if (!"PRIMARY".equalsIgnoreCase(constraintName)) {
+                            continue;
+                        }
                     }
 
                     columns.add(
@@ -802,6 +813,18 @@ public final class DorisCatalog
                      connection.prepareStatement(sql)) {
 
             statement.execute();
+        }
+    }
+
+    /**
+     * 执行任意 DDL 语句（供 SinkPreparer 调用）。
+     */
+    public void executeDdl(String sql) throws CatalogException {
+        checkOpened();
+        try (Connection connection = openRootConnection()) {
+            execute(connection, sql);
+        } catch (SQLException e) {
+            throw new CatalogException("执行 Doris DDL 失败：" + sql, e);
         }
     }
 

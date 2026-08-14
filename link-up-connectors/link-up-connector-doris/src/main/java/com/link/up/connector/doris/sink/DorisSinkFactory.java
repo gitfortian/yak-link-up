@@ -6,6 +6,7 @@ import com.link.up.api.configuration.util.OptionRule;
 import com.link.up.api.connector.schema.ConnectorCapability;
 import com.link.up.api.factory.SinkFactory;
 import com.link.up.api.sink.PreparedSinkMetadata;
+import com.link.up.api.sink.SinkPreparer;
 import com.link.up.api.sink.SinkWriter;
 import com.link.up.api.table.type.FluxRow;
 import com.link.up.connector.doris.config.DorisSinkConfig;
@@ -62,8 +63,40 @@ public final class DorisSinkFactory implements SinkFactory {
                         DorisSinkOptions.CSV_COLUMN_SEPARATOR,
                         DorisSinkOptions.DORIS_CONFIG,
                         DorisSinkOptions.CONNECT_TIMEOUT_MS,
-                        DorisSinkOptions.SOCKET_TIMEOUT_MS)
+                        DorisSinkOptions.SOCKET_TIMEOUT_MS,
+                        // 建表配置
+                        DorisSinkOptions.SINK_CREATE_TABLE_DDL,
+                        DorisSinkOptions.SINK_KEY_TYPE,
+                        DorisSinkOptions.SINK_BUCKETS,
+                        // Stream Load 扩展参数
+                        DorisSinkOptions.SINK_LOAD_TIMEOUT_SEC,
+                        DorisSinkOptions.SINK_MAX_FILTER_RATIO,
+                        DorisSinkOptions.SINK_COLUMNS,
+                        DorisSinkOptions.SINK_WHERE,
+                        DorisSinkOptions.SINK_PARTITIONS,
+                        DorisSinkOptions.SINK_STRICT_MODE,
+                        DorisSinkOptions.SINK_TIMEZONE,
+                        DorisSinkOptions.SINK_EXEC_MEM_LIMIT,
+                        DorisSinkOptions.SINK_JSONPATHS,
+                        DorisSinkOptions.SINK_STRIP_OUTER_ARRAY,
+                        DorisSinkOptions.SINK_JSON_ROOT,
+                        DorisSinkOptions.SINK_SEND_BATCH_PARALLELISM,
+                        DorisSinkOptions.SINK_LOAD_TO_SINGLE_TABLET,
+                        DorisSinkOptions.SINK_LINE_DELIMITER,
+                        DorisSinkOptions.SINK_ENCLOSE,
+                        DorisSinkOptions.SINK_ESCAPE,
+                        DorisSinkOptions.SINK_NUM_AS_STRING,
+                        DorisSinkOptions.SINK_FUZZY_PARSE,
+                        DorisSinkOptions.SINK_COMPRESS_TYPE,
+                        DorisSinkOptions.SINK_TRIM_DOUBLE_QUOTES,
+                        DorisSinkOptions.SINK_SKIP_LINES,
+                        DorisSinkOptions.SINK_LOAD_COMMENT)
                 .build();
+    }
+
+    @Override
+    public SinkPreparer createPreparer(ReadonlyConfig config) {
+        return new DorisSinkPreparer(DorisSinkConfig.of(config));
     }
 
     @Override

@@ -28,10 +28,16 @@ public final class DorisRowSerializer {
 
     private final DorisSinkConfig config;
     private final TableSchema schema;
+    private final String enclose;
+    private final String escape;
+    private final String lineDelimiter;
 
     public DorisRowSerializer(DorisSinkConfig config, TableSchema schema) {
         this.config = config;
         this.schema = schema;
+        this.enclose = config.getEnclose();
+        this.escape = config.getEscape();
+        this.lineDelimiter = config.getLineDelimiter();
     }
 
     /**
@@ -68,6 +74,9 @@ public final class DorisRowSerializer {
 
     /**
      * CSV 格式：每行用分隔符分隔的字段值。
+     *
+     * <p>当配置了 enclose 时，字段值中包含分隔符、换行符或包围符本身时，
+     * 会自动用包围符包裹字段，并用转义符处理内部的包围符字符。
      */
     private String serializeCsv(List<FluxRow> rows) {
         String separator = config.getCsvColumnSeparator();
@@ -75,7 +84,7 @@ public final class DorisRowSerializer {
 
         for (int i = 0; i < rows.size(); i++) {
             if (i > 0) {
-                sb.append('\n');
+                sb.append(lineDelimiter != null ? lineDelimiter : "\n");
             }
             FluxRow row = rows.get(i);
             for (int f = 0; f < schema.getColumnCount(); f++) {
@@ -145,12 +154,33 @@ public final class DorisRowSerializer {
         if (value == null) {
             return "\\N";
         }
+
+        String text;
         if (value instanceof byte[]) {
-            return java.util.Base64.getEncoder().encodeToString((byte[]) value);
+            text = java.util.Base64.getEncoder().encodeToString((byte[]) value);
+        } else if (value instanceof LocalDate || value instanceof LocalTime || value instanceof LocalDateTime) {
+            text = value.toString();
+        } else {
+            text = String.valueOf(value);
         }
-        if (value instanceof LocalDate || value instanceof LocalTime || value instanceof LocalDateTime) {
-            return value.toString();
+
+        // 当配置了 enclose 时，检查字段值是否包含需要包围的字符
+        if (enclose != null && !enclose.isEmpty()) {
+            String separator = config.getCsvColumnSeparator();
+            String ld = lineDelimiter != null ? lineDelimiter : "\n";
+            boolean needsEnclose = text.contains(separator)
+                    || text.contains(ld)
+                    || text.contains(enclose);
+
+            if (needsEnclose) {
+                // 先用 escape 转义字段中出现的 enclose 字符
+                if (escape != null && !escape.isEmpty()) {
+                    text = text.replace(enclose, escape + enclose);
+                }
+                return enclose + text + enclose;
+            }
         }
-        return String.valueOf(value);
+
+        return text;
     }
 }

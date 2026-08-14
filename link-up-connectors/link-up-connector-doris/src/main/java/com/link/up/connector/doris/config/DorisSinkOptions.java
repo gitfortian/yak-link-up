@@ -185,6 +185,214 @@ public final class DorisSinkOptions {
                     .withSemanticType("DORIS_CONFIG")
                     .withScope(ConnectorOptionScope.TASK);
 
+    // ── 建表配置 ──────────────────────────────────────────
+
+    public static final Option<String> SINK_CREATE_TABLE_DDL =
+            Options.key("sink.create-table-ddl")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("用户自定义建表 DDL，优先级高于自动生成。" +
+                            "支持 Doris 完整 CREATE TABLE 语法，包括表模型、分布方式、PROPERTIES 等")
+                    .withSemanticType("CREATE_TABLE_DDL")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_KEY_TYPE =
+            Options.key("sink.key-type")
+                    .stringType()
+                    .defaultValue("DUPLICATE")
+                    .withDescription("Doris 表模型类型：DUPLICATE（明细模型）、UNIQUE（主键模型）、AGGREGATE（聚合模型）。" +
+                            "仅在未指定 sink.create-table-ddl 时生效")
+                    .withSemanticType("KEY_TYPE")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Integer> SINK_BUCKETS =
+            Options.key("sink.buckets")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription("Doris 建表 DISTRIBUTED BY HASH 的 bucket 数量，仅在自动生成 DDL 时生效")
+                    .withSemanticType("BUCKETS")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    // ── Stream Load 扩展参数 ──────────────────────────────────
+
+    public static final Option<Integer> SINK_LOAD_TIMEOUT_SEC =
+            Options.key("sink.load-timeout")
+                    .intType()
+                    .defaultValue(600)
+                    .withDescription("Stream Load 导入超时时间（秒），可设置范围 1~259200")
+                    .withSemanticType("TIMEOUT")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    public static final Option<Double> SINK_MAX_FILTER_RATIO =
+            Options.key("sink.max-filter-ratio")
+                    .doubleType()
+                    .defaultValue(0.0)
+                    .withDescription("Stream Load 最大容忍可过滤的数据比例（0~1），默认零容忍")
+                    .withSemanticType("MAX_FILTER_RATIO")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    public static final Option<String> SINK_COLUMNS =
+            Options.key("sink.columns")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load 列映射，指定导入文件中的列和表中的列的对应关系。" +
+                            "例如：user_id,name,age 或 user_id,name,age=age+1")
+                    .withSemanticType("COLUMNS")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_WHERE =
+            Options.key("sink.where")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load 数据过滤条件，例如：age>=35")
+                    .withSemanticType("WHERE")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_PARTITIONS =
+            Options.key("sink.partitions")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load 指定导入分区，例如：p1, p2")
+                    .withSemanticType("PARTITIONS")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Boolean> SINK_STRICT_MODE =
+            Options.key("sink.strict-mode")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Stream Load 是否开启严格模式")
+                    .withSemanticType("STRICT_MODE")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    public static final Option<String> SINK_TIMEZONE =
+            Options.key("sink.timezone")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load 导入所使用的时区，默认为集群当前时区")
+                    .withSemanticType("TIMEZONE")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Long> SINK_EXEC_MEM_LIMIT =
+            Options.key("sink.exec-mem-limit")
+                    .longType()
+                    .defaultValue(2147483648L)
+                    .withDescription("Stream Load 导入内存限制（字节），默认 2GB")
+                    .withSemanticType("EXEC_MEM_LIMIT")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    public static final Option<String> SINK_JSONPATHS =
+            Options.key("sink.jsonpaths")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load JSON 列映射路径，例如：[\"$.userid\", \"$.username\"]")
+                    .withSemanticType("JSONPATHS")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Boolean> SINK_STRIP_OUTER_ARRAY =
+            Options.key("sink.strip-outer-array")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Stream Load JSON 格式是否展平外层数组")
+                    .withSemanticType("STRIP_OUTER_ARRAY")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_JSON_ROOT =
+            Options.key("sink.json-root")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load JSON 根节点路径，例如：$.comment")
+                    .withSemanticType("JSON_ROOT")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Integer> SINK_SEND_BATCH_PARALLELISM =
+            Options.key("sink.send-batch-parallelism")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription("Stream Load 发送批处理数据的并行度")
+                    .withSemanticType("SEND_BATCH_PARALLELISM")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    public static final Option<Boolean> SINK_LOAD_TO_SINGLE_TABLET =
+            Options.key("sink.load-to-single-tablet")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Stream Load 是否只导入数据到对应分区的一个 Tablet")
+                    .withSemanticType("LOAD_TO_SINGLE_TABLET")
+                    .withScope(ConnectorOptionScope.RUNTIME);
+
+    public static final Option<String> SINK_LINE_DELIMITER =
+            Options.key("sink.line-delimiter")
+                    .stringType()
+                    .defaultValue("\n")
+                    .withDescription("Stream Load 换行符，默认 \\n")
+                    .withSemanticType("LINE_DELIMITER")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_ENCLOSE =
+            Options.key("sink.enclose")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load CSV 包围符，用于防止分隔符截断字段")
+                    .withSemanticType("ENCLOSE")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_ESCAPE =
+            Options.key("sink.escape")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load CSV 转义符")
+                    .withSemanticType("ESCAPE")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Boolean> SINK_NUM_AS_STRING =
+            Options.key("sink.num-as-string")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Stream Load JSON 格式是否将数字类型转为字符串，避免精度丢失")
+                    .withSemanticType("NUM_AS_STRING")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Boolean> SINK_FUZZY_PARSE =
+            Options.key("sink.fuzzy-parse")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Stream Load JSON 格式是否以第一行为 schema 解析，可提升效率")
+                    .withSemanticType("FUZZY_PARSE")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_COMPRESS_TYPE =
+            Options.key("sink.compress-type")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load CSV 文件压缩格式，支持 gz, lzo, bz2, lz4, lzop, deflate。" +
+                            "仅对 CSV 格式生效")
+                    .withSemanticType("COMPRESS_TYPE")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Boolean> SINK_TRIM_DOUBLE_QUOTES =
+            Options.key("sink.trim-double-quotes")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Stream Load CSV 格式是否裁剪每个字段最外层的双引号")
+                    .withSemanticType("TRIM_DOUBLE_QUOTES")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<Integer> SINK_SKIP_LINES =
+            Options.key("sink.skip-lines")
+                    .intType()
+                    .defaultValue(0)
+                    .withDescription("Stream Load CSV 格式跳过前 N 行（设置 format=csv_with_names 时自动失效）")
+                    .withSemanticType("SKIP_LINES")
+                    .withScope(ConnectorOptionScope.TASK);
+
+    public static final Option<String> SINK_LOAD_COMMENT =
+            Options.key("sink.load-comment")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Stream Load 导入任务附加备注信息")
+                    .withSemanticType("COMMENT")
+                    .withScope(ConnectorOptionScope.TASK);
+
     // ── 超时 ──────────────────────────────────────────────
 
     public static final Option<Integer> CONNECT_TIMEOUT_MS =

@@ -35,6 +35,35 @@ public final class DorisSinkConfig {
     private final int connectTimeoutMs;
     private final int socketTimeoutMs;
 
+    // 建表配置
+    private final String createTableDdl;
+    private final String keyType;
+    private final int buckets;
+
+    // Stream Load 扩展参数
+    private final int loadTimeoutSec;
+    private final double maxFilterRatio;
+    private final String columns;
+    private final String where;
+    private final String partitions;
+    private final boolean strictMode;
+    private final String timezone;
+    private final long execMemLimit;
+    private final String jsonpaths;
+    private final boolean stripOuterArray;
+    private final String jsonRoot;
+    private final int sendBatchParallelism;
+    private final boolean loadToSingleTablet;
+    private final String lineDelimiter;
+    private final String enclose;
+    private final String escape;
+    private final boolean numAsString;
+    private final boolean fuzzyParse;
+    private final String compressType;
+    private final boolean trimDoubleQuotes;
+    private final int skipLines;
+    private final String loadComment;
+
     private DorisSinkConfig(Builder b) {
         this.fenodes = b.fenodes;
         this.benodes = b.benodes;
@@ -57,6 +86,31 @@ public final class DorisSinkConfig {
         this.dorisConfig = b.dorisConfig;
         this.connectTimeoutMs = b.connectTimeoutMs;
         this.socketTimeoutMs = b.socketTimeoutMs;
+        this.createTableDdl = b.createTableDdl;
+        this.keyType = b.keyType;
+        this.buckets = b.buckets;
+        this.loadTimeoutSec = b.loadTimeoutSec;
+        this.maxFilterRatio = b.maxFilterRatio;
+        this.columns = b.columns;
+        this.where = b.where;
+        this.partitions = b.partitions;
+        this.strictMode = b.strictMode;
+        this.timezone = b.timezone;
+        this.execMemLimit = b.execMemLimit;
+        this.jsonpaths = b.jsonpaths;
+        this.stripOuterArray = b.stripOuterArray;
+        this.jsonRoot = b.jsonRoot;
+        this.sendBatchParallelism = b.sendBatchParallelism;
+        this.loadToSingleTablet = b.loadToSingleTablet;
+        this.lineDelimiter = b.lineDelimiter;
+        this.enclose = b.enclose;
+        this.escape = b.escape;
+        this.numAsString = b.numAsString;
+        this.fuzzyParse = b.fuzzyParse;
+        this.compressType = b.compressType;
+        this.trimDoubleQuotes = b.trimDoubleQuotes;
+        this.skipLines = b.skipLines;
+        this.loadComment = b.loadComment;
     }
 
     public static DorisSinkConfig of(ReadonlyConfig options) {
@@ -80,7 +134,7 @@ public final class DorisSinkConfig {
         }
         String labelPrefix = options.get(DorisSinkOptions.SINK_LABEL_PREFIX);
         if (labelPrefix == null || labelPrefix.trim().isEmpty()) {
-            throw new IllegalArgumentException("Doris Sink 'sink.label-prefix' must not be blank");
+            labelPrefix = "link_up_" + database + "_" + table;
         }
 
         return new Builder()
@@ -105,6 +159,31 @@ public final class DorisSinkConfig {
                 .dorisConfig(copyMap(options.get(DorisSinkOptions.DORIS_CONFIG)))
                 .connectTimeoutMs(options.get(DorisSinkOptions.CONNECT_TIMEOUT_MS))
                 .socketTimeoutMs(options.get(DorisSinkOptions.SOCKET_TIMEOUT_MS))
+                .createTableDdl(options.get(DorisSinkOptions.SINK_CREATE_TABLE_DDL))
+                .keyType(options.get(DorisSinkOptions.SINK_KEY_TYPE))
+                .buckets(options.get(DorisSinkOptions.SINK_BUCKETS))
+                .loadTimeoutSec(options.get(DorisSinkOptions.SINK_LOAD_TIMEOUT_SEC))
+                .maxFilterRatio(options.get(DorisSinkOptions.SINK_MAX_FILTER_RATIO))
+                .columns(options.get(DorisSinkOptions.SINK_COLUMNS))
+                .where(options.get(DorisSinkOptions.SINK_WHERE))
+                .partitions(options.get(DorisSinkOptions.SINK_PARTITIONS))
+                .strictMode(options.get(DorisSinkOptions.SINK_STRICT_MODE))
+                .timezone(options.get(DorisSinkOptions.SINK_TIMEZONE))
+                .execMemLimit(options.get(DorisSinkOptions.SINK_EXEC_MEM_LIMIT))
+                .jsonpaths(options.get(DorisSinkOptions.SINK_JSONPATHS))
+                .stripOuterArray(options.get(DorisSinkOptions.SINK_STRIP_OUTER_ARRAY))
+                .jsonRoot(options.get(DorisSinkOptions.SINK_JSON_ROOT))
+                .sendBatchParallelism(options.get(DorisSinkOptions.SINK_SEND_BATCH_PARALLELISM))
+                .loadToSingleTablet(options.get(DorisSinkOptions.SINK_LOAD_TO_SINGLE_TABLET))
+                .lineDelimiter(options.get(DorisSinkOptions.SINK_LINE_DELIMITER))
+                .enclose(options.get(DorisSinkOptions.SINK_ENCLOSE))
+                .escape(options.get(DorisSinkOptions.SINK_ESCAPE))
+                .numAsString(options.get(DorisSinkOptions.SINK_NUM_AS_STRING))
+                .fuzzyParse(options.get(DorisSinkOptions.SINK_FUZZY_PARSE))
+                .compressType(options.get(DorisSinkOptions.SINK_COMPRESS_TYPE))
+                .trimDoubleQuotes(options.get(DorisSinkOptions.SINK_TRIM_DOUBLE_QUOTES))
+                .skipLines(options.get(DorisSinkOptions.SINK_SKIP_LINES))
+                .loadComment(options.get(DorisSinkOptions.SINK_LOAD_COMMENT))
                 .build();
     }
 
@@ -168,6 +247,35 @@ public final class DorisSinkConfig {
     public int getConnectTimeoutMs() { return connectTimeoutMs; }
     public int getSocketTimeoutMs() { return socketTimeoutMs; }
 
+    // 建表配置
+    public String getCreateTableDdl() { return createTableDdl; }
+    public String getKeyType() { return keyType; }
+    public int getBuckets() { return buckets; }
+
+    // Stream Load 扩展参数
+    public int getLoadTimeoutSec() { return loadTimeoutSec; }
+    public double getMaxFilterRatio() { return maxFilterRatio; }
+    public String getColumns() { return columns; }
+    public String getWhere() { return where; }
+    public String getPartitions() { return partitions; }
+    public boolean isStrictMode() { return strictMode; }
+    public String getTimezone() { return timezone; }
+    public long getExecMemLimit() { return execMemLimit; }
+    public String getJsonpaths() { return jsonpaths; }
+    public boolean isStripOuterArray() { return stripOuterArray; }
+    public String getJsonRoot() { return jsonRoot; }
+    public int getSendBatchParallelism() { return sendBatchParallelism; }
+    public boolean isLoadToSingleTablet() { return loadToSingleTablet; }
+    public String getLineDelimiter() { return lineDelimiter; }
+    public String getEnclose() { return enclose; }
+    public String getEscape() { return escape; }
+    public boolean isNumAsString() { return numAsString; }
+    public boolean isFuzzyParse() { return fuzzyParse; }
+    public String getCompressType() { return compressType; }
+    public boolean isTrimDoubleQuotes() { return trimDoubleQuotes; }
+    public int getSkipLines() { return skipLines; }
+    public String getLoadComment() { return loadComment; }
+
     public static final class Builder {
         private String fenodes;
         private String benodes;
@@ -190,6 +298,31 @@ public final class DorisSinkConfig {
         private Map<String, String> dorisConfig = Collections.emptyMap();
         private int connectTimeoutMs = 30000;
         private int socketTimeoutMs = 300000;
+        private String createTableDdl;
+        private String keyType = "DUPLICATE";
+        private int buckets = 10;
+        private int loadTimeoutSec = 600;
+        private double maxFilterRatio = 0.0;
+        private String columns;
+        private String where;
+        private String partitions;
+        private boolean strictMode = false;
+        private String timezone;
+        private long execMemLimit = 2147483648L;
+        private String jsonpaths;
+        private boolean stripOuterArray = false;
+        private String jsonRoot;
+        private int sendBatchParallelism = 1;
+        private boolean loadToSingleTablet = false;
+        private String lineDelimiter = "\n";
+        private String enclose;
+        private String escape;
+        private boolean numAsString = false;
+        private boolean fuzzyParse = false;
+        private String compressType;
+        private boolean trimDoubleQuotes = false;
+        private int skipLines = 0;
+        private String loadComment;
 
         public Builder fenodes(String v) { this.fenodes = v; return this; }
         public Builder benodes(String v) { this.benodes = v; return this; }
@@ -212,6 +345,31 @@ public final class DorisSinkConfig {
         public Builder dorisConfig(Map<String, String> v) { this.dorisConfig = v; return this; }
         public Builder connectTimeoutMs(int v) { this.connectTimeoutMs = v; return this; }
         public Builder socketTimeoutMs(int v) { this.socketTimeoutMs = v; return this; }
+        public Builder createTableDdl(String v) { this.createTableDdl = v; return this; }
+        public Builder keyType(String v) { this.keyType = v; return this; }
+        public Builder buckets(int v) { this.buckets = v; return this; }
+        public Builder loadTimeoutSec(int v) { this.loadTimeoutSec = v; return this; }
+        public Builder maxFilterRatio(double v) { this.maxFilterRatio = v; return this; }
+        public Builder columns(String v) { this.columns = v; return this; }
+        public Builder where(String v) { this.where = v; return this; }
+        public Builder partitions(String v) { this.partitions = v; return this; }
+        public Builder strictMode(boolean v) { this.strictMode = v; return this; }
+        public Builder timezone(String v) { this.timezone = v; return this; }
+        public Builder execMemLimit(long v) { this.execMemLimit = v; return this; }
+        public Builder jsonpaths(String v) { this.jsonpaths = v; return this; }
+        public Builder stripOuterArray(boolean v) { this.stripOuterArray = v; return this; }
+        public Builder jsonRoot(String v) { this.jsonRoot = v; return this; }
+        public Builder sendBatchParallelism(int v) { this.sendBatchParallelism = v; return this; }
+        public Builder loadToSingleTablet(boolean v) { this.loadToSingleTablet = v; return this; }
+        public Builder lineDelimiter(String v) { this.lineDelimiter = v; return this; }
+        public Builder enclose(String v) { this.enclose = v; return this; }
+        public Builder escape(String v) { this.escape = v; return this; }
+        public Builder numAsString(boolean v) { this.numAsString = v; return this; }
+        public Builder fuzzyParse(boolean v) { this.fuzzyParse = v; return this; }
+        public Builder compressType(String v) { this.compressType = v; return this; }
+        public Builder trimDoubleQuotes(boolean v) { this.trimDoubleQuotes = v; return this; }
+        public Builder skipLines(int v) { this.skipLines = v; return this; }
+        public Builder loadComment(String v) { this.loadComment = v; return this; }
 
         public DorisSinkConfig build() {
             return new DorisSinkConfig(this);
