@@ -228,7 +228,7 @@ public final class HttpResponseParser {
         return String.valueOf(result);
     }
 
-    // ── JsonPath 工具 ──────────────────────────────────────
+    // ── JsonPath 工具 ──────────────────────────────────────────
 
     private static JsonNode evaluateJsonPath(JsonNode root, String jsonPath) {
         String normalized = normalizeJsonPath(jsonPath);
