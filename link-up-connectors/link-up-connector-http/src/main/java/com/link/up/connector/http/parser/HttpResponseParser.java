@@ -1,0 +1,414 @@
+package com.link.up.connector.http.parser;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.jayway.jsonpath.Configuration;
+import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.Option;
+import com.jayway.jsonpath.spi.json.JacksonJsonNodeJsonProvider;
+import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
+import com.link.up.api.table.catalog.Column;
+import com.link.up.api.table.catalog.TableSchema;
+import com.link.up.api.table.type.BasicType;
+import com.link.up.api.table.type.SqlType;
+import com.link.up.api.table.type.FluxRow;
+import com.link.up.connector.http.config.HttpFormat;
+import com.link.up.connector.http.config.HttpSourceConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * HTTP 响应解析器。
+ *
+ * <p>支持两种 JSON 提取模式：
+ * <ul>
+ *   <li><b>content_field</b>：提取 JSON 数组，每个元素映射为一行</li>
+ *   <li><b>json_field</b>：每个字段独立提取值数组，按行对齐</li>
+ * </ul>
+ */
+public final class HttpResponseParser {
+
+    private static final Logger LOG =
+            LoggerFactory.getLogger(HttpResponseParser.class);
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final Configuration JSON_PATH_CONFIG =
+            Configuration.builder()
+                    .jsonProvider(new JacksonJsonNodeJsonProvider())
+                    .mappingProvider(new JacksonMappingProvider())
+                    .options(Option.SUPPRESS_EXCEPTIONS)
+                    .build();
+
+    private HttpResponseParser() {
+    }
+
+    /**
+     * 解析 HTTP 响应为 FluxRow 列表。
+     */
+    public static List<FluxRow> parseResponse(
+            String responseBody,
+            HttpSourceConfig config,
+            TableSchema schema) throws Exception {
+
+        if (config.getFormat() == HttpFormat.TEXT) {
+            return parseTextResponse(responseBody, config);
+        }
+
+        // JSON 格式
+        if (!config.getJsonField().isEmpty()) {
+            return parseByJsonField(responseBody, config, schema);
+        }
+
+        return parseByContentField(responseBody, config, schema);
+    }
+
+    // ── TEXT 格式 ──────────────────────────────────────────
+
+    private static List<FluxRow> parseTextResponse(
+            String responseBody,
+            HttpSourceConfig config) {
+
+        if (responseBody == null || responseBody.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        if (config.isEnableMultiLines()) {
+            String[] lines = responseBody.split("\\r?\\n");
+            List<FluxRow> rows = new ArrayList<>(lines.length);
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty()) {
+                    rows.add(FluxRow.of(trimmed));
+                }
+            }
+            return rows;
+        }
+
+        return Collections.singletonList(FluxRow.of(responseBody));
+    }
+
+    // ── JSON content_field 模式 ──────────────────────────────
+
+    private static List<FluxRow> parseByContentField(
+            String responseBody,
+            HttpSourceConfig config,
+            TableSchema schema) throws Exception {
+
+        JsonNode root = MAPPER.readTree(responseBody);
+        JsonNode dataNode;
+
+        if (config.getContentField() != null && !config.getContentField().isEmpty()) {
+            dataNode = evaluateJsonPath(root, config.getContentField());
+        } else {
+            dataNode = root;
+        }
+
+        if (dataNode == null || dataNode.isMissingNode()) {
+            return Collections.emptyList();
+        }
+
+        if (dataNode.isArray()) {
+            List<FluxRow> rows = new ArrayList<>(dataNode.size());
+            for (JsonNode element : dataNode) {
+                if (element.isObject()) {
+                    rows.add(mapJsonNodeToRow(element, schema, config.isJsonFieldMissedReturnNull()));
+                }
+            }
+            return rows;
+        }
+
+        if (dataNode.isObject()) {
+            return Collections.singletonList(
+                    mapJsonNodeToRow(dataNode, schema, config.isJsonFieldMissedReturnNull()));
+        }
+
+        // 基本类型值（如字符串、数字）
+        return Collections.singletonList(FluxRow.of(jsonNodeToJavaValue(dataNode)));
+    }
+
+    // ── JSON json_field 模式 ─────────────────────────────────
+
+    private static List<FluxRow> parseByJsonField(
+            String responseBody,
+            HttpSourceConfig config,
+            TableSchema schema) throws Exception {
+
+        JsonNode root = MAPPER.readTree(responseBody);
+        Map<String, Object> jsonFieldMapping = config.getJsonField();
+
+        // 每个字段提取值列表
+        List<String> fieldNames = schema.getColumns().stream()
+                .map(Column::getName)
+                .collect(Collectors.toList());
+
+        List<List<Object>> fieldValues = new ArrayList<>(fieldNames.size());
+        int maxLen = 0;
+
+        for (String fieldName : fieldNames) {
+            String jsonPath = (String) jsonFieldMapping.get(fieldName);
+            List<Object> values;
+
+            if (jsonPath != null && !jsonPath.isEmpty()) {
+                values = extractJsonPathValues(root, jsonPath);
+            } else {
+                // 没有配置 JsonPath，尝试直接用字段名从根对象取值
+                values = extractDirectField(root, fieldName);
+            }
+
+            fieldValues.add(values);
+            maxLen = Math.max(maxLen, values.size());
+        }
+
+        if (maxLen == 0) {
+            return Collections.emptyList();
+        }
+
+        // 按行对齐
+        List<FluxRow> rows = new ArrayList<>(maxLen);
+        for (int i = 0; i < maxLen; i++) {
+            FluxRow row = new FluxRow(fieldNames.size());
+            for (int f = 0; f < fieldNames.size(); f++) {
+                List<Object> values = fieldValues.get(f);
+                Object value = i < values.size() ? values.get(i) : null;
+                Column column = schema.getColumn(f);
+                row.setField(f, convertValue(value, column));
+            }
+            rows.add(row);
+        }
+
+        return rows;
+    }
+
+    /**
+     * 从 JSON 响应中提取单个字符串值。
+     *
+     * <p>用于 Cursor 分页时从响应中提取游标值。
+     *
+     * @param responseBody JSON 响应体
+     * @param jsonPath     JsonPath 表达式
+     * @return 提取的字符串值，未找到时返回 null
+     */
+    public static String extractSingleStringValue(
+            String responseBody,
+            String jsonPath) throws Exception {
+
+        if (responseBody == null || jsonPath == null) {
+            return null;
+        }
+
+        JsonNode root = MAPPER.readTree(responseBody);
+        String normalized = normalizeJsonPath(jsonPath);
+        Object result = JsonPath.using(JSON_PATH_CONFIG).parse(root).read(normalized);
+
+        if (result == null) {
+            return null;
+        }
+
+        if (result instanceof JsonNode) {
+            JsonNode node = (JsonNode) result;
+            if (node.isNull() || node.isMissingNode()) {
+                return null;
+            }
+            return node.isTextual() ? node.asText() : node.toString();
+        }
+
+        return String.valueOf(result);
+    }
+
+    // ── JsonPath 工具 ──────────────────────────────────────────
+
+    private static JsonNode evaluateJsonPath(JsonNode root, String jsonPath) {
+        String normalized = normalizeJsonPath(jsonPath);
+        Object result = JsonPath.using(JSON_PATH_CONFIG).parse(root).read(normalized);
+        if (result instanceof JsonNode) {
+            return (JsonNode) result;
+        }
+        return null;
+    }
+
+    private static List<Object> extractJsonPathValues(JsonNode root, String jsonPath) {
+        String normalized = normalizeJsonPath(jsonPath);
+        Object result = JsonPath.using(JSON_PATH_CONFIG).parse(root).read(normalized);
+
+        if (result == null) {
+            return Collections.emptyList();
+        }
+
+        if (result instanceof ArrayNode) {
+            ArrayNode array = (ArrayNode) result;
+            List<Object> values = new ArrayList<>(array.size());
+            for (JsonNode node : array) {
+                values.add(jsonNodeToJavaValue(node));
+            }
+            return values;
+        }
+
+        if (result instanceof JsonNode) {
+            JsonNode node = (JsonNode) result;
+            if (node.isArray()) {
+                List<Object> values = new ArrayList<>(node.size());
+                for (JsonNode child : node) {
+                    values.add(jsonNodeToJavaValue(child));
+                }
+                return values;
+            }
+            return Collections.singletonList(jsonNodeToJavaValue(node));
+        }
+
+        return Collections.singletonList(result);
+    }
+
+    private static List<Object> extractDirectField(JsonNode root, String fieldName) {
+        if (root.isObject() && root.has(fieldName)) {
+            JsonNode value = root.get(fieldName);
+            if (value.isArray()) {
+                List<Object> values = new ArrayList<>(value.size());
+                for (JsonNode element : value) {
+                    values.add(jsonNodeToJavaValue(element));
+                }
+                return values;
+            }
+            return Collections.singletonList(jsonNodeToJavaValue(value));
+        }
+        return Collections.emptyList();
+    }
+
+    /**
+     * 将 JsonPath 中的 {@code *} 通配符转换为标准 {@code [*]} 语法。
+     */
+    private static String normalizeJsonPath(String path) {
+        if (path == null) {
+            return "$";
+        }
+        // $.store.book.* → $.store.book[*]
+        return path.replaceAll("\\.\\*", "[*]");
+    }
+
+    // ── JSON → FluxRow 映射 ──────────────────────────────────
+
+    private static FluxRow mapJsonNodeToRow(
+            JsonNode node,
+            TableSchema schema,
+            boolean missingReturnNull) {
+
+        FluxRow row = new FluxRow(schema.getColumnCount());
+
+        for (int i = 0; i < schema.getColumnCount(); i++) {
+            Column column = schema.getColumn(i);
+            JsonNode fieldNode = node.get(column.getName());
+
+            if (fieldNode == null || fieldNode.isNull() || fieldNode.isMissingNode()) {
+                if (!missingReturnNull && fieldNode == null) {
+                    throw new IllegalArgumentException(
+                            "JSON field '" + column.getName() + "' is missing. "
+                                    + "Set json_field_missed_return_null=true to allow null values.");
+                }
+                row.setField(i, null);
+            } else {
+                row.setField(i, convertValue(jsonNodeToJavaValue(fieldNode), column));
+            }
+        }
+
+        return row;
+    }
+
+    // ── 类型转换 ──────────────────────────────────────────
+
+    private static Object jsonNodeToJavaValue(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        if (node.isTextual()) return node.asText();
+        if (node.isBoolean()) return node.asBoolean();
+        if (node.isInt()) return node.asInt();
+        if (node.isLong()) return node.asLong();
+        if (node.isFloat() || node.isDouble()) return node.asDouble();
+        if (node.isBigDecimal()) return node.decimalValue();
+        if (node.isBinary()) {
+            try {
+                return node.binaryValue();
+            } catch (Exception e) {
+                return node.asText();
+            }
+        }
+        // 复杂类型（对象、数组）序列化为字符串
+        return node.toString();
+    }
+
+    private static Object convertValue(Object value, Column column) {
+        if (value == null) {
+            return null;
+        }
+
+        SqlType sqlType = column.getDataType().getSqlType();
+
+        switch (sqlType) {
+            case STRING:
+                return String.valueOf(value);
+
+            case BOOLEAN:
+                if (value instanceof Boolean) return value;
+                return Boolean.parseBoolean(String.valueOf(value));
+
+            case TINYINT:
+                if (value instanceof Number) return ((Number) value).byteValue();
+                return Byte.parseByte(String.valueOf(value));
+
+            case SMALLINT:
+                if (value instanceof Number) return ((Number) value).shortValue();
+                return Short.parseShort(String.valueOf(value));
+
+            case INT:
+                if (value instanceof Number) return ((Number) value).intValue();
+                return Integer.parseInt(String.valueOf(value));
+
+            case BIGINT:
+                if (value instanceof Number) return ((Number) value).longValue();
+                return Long.parseLong(String.valueOf(value));
+
+            case FLOAT:
+                if (value instanceof Number) return ((Number) value).floatValue();
+                return Float.parseFloat(String.valueOf(value));
+
+            case DOUBLE:
+                if (value instanceof Number) return ((Number) value).doubleValue();
+                return Double.parseDouble(String.valueOf(value));
+
+            case DECIMAL:
+                if (value instanceof BigDecimal) return value;
+                return new BigDecimal(String.valueOf(value));
+
+            case DATE:
+                if (value instanceof LocalDate) return value;
+                return LocalDate.parse(String.valueOf(value));
+
+            case TIME:
+                if (value instanceof LocalTime) return value;
+                return LocalTime.parse(String.valueOf(value));
+
+            case TIMESTAMP:
+                if (value instanceof LocalDateTime) return value;
+                return LocalDateTime.parse(String.valueOf(value));
+
+            case BYTES:
+                if (value instanceof byte[]) return value;
+                return String.valueOf(value).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+            default:
+                return String.valueOf(value);
+        }
+    }
+}
