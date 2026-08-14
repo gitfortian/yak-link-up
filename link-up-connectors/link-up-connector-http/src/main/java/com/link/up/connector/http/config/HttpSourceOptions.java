@@ -114,60 +114,67 @@ public final class HttpSourceOptions {
     // ── 分页配置 ──────────────────────────────────────────
 
     public static final Option<String> PAGE_FIELD =
-            Options.key("pageing.page_field")
+            Options.key("paging.page_field")
                     .stringType()
                     .defaultValue("page")
                     .withDescription("分页字段名")
                     .withSemanticType("PAGE_FIELD")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.page_field");
 
     public static final Option<Long> TOTAL_PAGE_SIZE =
-            Options.key("pageing.total_page_size")
+            Options.key("paging.total_page_size")
                     .longType()
                     .defaultValue(0L)
                     .withDescription("总页数，0 表示根据返回行数判断是否继续")
                     .withSemanticType("TOTAL_PAGES")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.total_page_size");
 
     public static final Option<Integer> PAGE_BATCH_SIZE =
-            Options.key("pageing.batch_size")
+            Options.key("paging.batch_size")
                     .intType()
                     .defaultValue(100)
                     .withDescription("每页返回行数，用于判断是否继续翻页")
                     .withSemanticType("PAGE_BATCH_SIZE")
-                    .withScope(ConnectorOptionScope.RUNTIME);
+                    .withScope(ConnectorOptionScope.RUNTIME)
+                    .withFallbackKeys("pageing.batch_size");
 
     public static final Option<Integer> START_PAGE_NUMBER =
-            Options.key("pageing.start_page_number")
+            Options.key("paging.start_page_number")
                     .intType()
                     .defaultValue(1)
                     .withDescription("起始页码")
                     .withSemanticType("START_PAGE")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.start_page_number");
 
     public static final Option<PageType> PAGE_TYPE =
-            Options.key("pageing.page_type")
+            Options.key("paging.page_type")
                     .enumType(PageType.class)
                     .defaultValue(PageType.PAGE_NUMBER)
                     .withDescription("分页类型：PAGE_NUMBER 或 CURSOR")
                     .withSemanticType("PAGE_TYPE")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.page_type");
 
     public static final Option<String> CURSOR_FIELD =
-            Options.key("pageing.cursor_field")
+            Options.key("paging.cursor_field")
                     .stringType()
                     .noDefaultValue()
                     .withDescription("Cursor 分页时请求参数中的游标字段名")
                     .withSemanticType("CURSOR_FIELD")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.cursor_field");
 
     public static final Option<String> CURSOR_RESPONSE_FIELD =
-            Options.key("pageing.cursor_response_field")
+            Options.key("paging.cursor_response_field")
                     .stringType()
                     .noDefaultValue()
                     .withDescription("Cursor 分页时从响应中提取游标值的 JsonPath")
                     .withSemanticType("CURSOR_RESPONSE_FIELD")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.cursor_response_field");
 
     /**
      * 是否使用占位符替换（${page}、${cursor}）。
@@ -176,12 +183,13 @@ public final class HttpSourceOptions {
      * 会被替换为实际值；为 false 时，仅按 key 进行替换。
      */
     public static final Option<Boolean> USE_PLACEHOLDER_REPLACEMENT =
-            Options.key("pageing.use_placeholder_replacement")
+            Options.key("paging.use_placeholder_replacement")
                     .booleanType()
                     .defaultValue(false)
                     .withDescription("是否使用占位符替换分页参数")
                     .withSemanticType("PLACEHOLDER_REPLACEMENT")
-                    .withScope(ConnectorOptionScope.TASK);
+                    .withScope(ConnectorOptionScope.TASK)
+                    .withFallbackKeys("pageing.use_placeholder_replacement");
 
     // ── 重试与超时 ──────────────────────────────────────────
 
