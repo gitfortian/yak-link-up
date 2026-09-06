@@ -20,6 +20,9 @@
         <module>link-up-connector-http</module>
         <module>link-up-connector-starrocks</module>
         <module>link-up-connector-clickhouse</module>
+        <module>link-up-connector-elasticsearch-common</module>
+        <module>link-up-connector-elasticsearch7</module>
+        <module>link-up-connector-elasticsearch8</module>
     </modules>
 
 </project>
