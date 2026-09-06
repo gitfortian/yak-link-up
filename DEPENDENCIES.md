@@ -39,10 +39,28 @@ internal
 
 JDBC 历史 `core/converter`、`core/dialect`、`core/split` 暂时保留，但不得新增新的 `core/*` 子域。
 
+### 多 Major Version Connector Family
+
+同一个外部系统存在不兼容的 Major Version SDK 时，可以拆成一个 family common 模块和多个版本叶子模块，例如 Elasticsearch：
+
+```text
+elasticsearch-common -> api
+elasticsearch7       -> elasticsearch-common + ES7 SDK
+elasticsearch8       -> elasticsearch-common + ES8 SDK
+```
+
+边界规则：
+
+- family common 模块只放 Link-Up / 产品公共语义，不得依赖任一版本的 vendor SDK。
+- 版本 SDK 只能存在于对应的叶子模块，版本叶子之间不得互相依赖。
+- 对外 connector identifier 必须体现不兼容的 Major Version，例如 `elasticsearch7` / `elasticsearch8`。
+- 如果多个叶子模块依赖同一个 Maven GAV 的不兼容版本，在 classloader / relocation 等隔离机制完成前，禁止同时平铺进 `launcher` / `server` runtime classpath。
+- “拆 Maven module”不是 runtime dependency isolation；是否能进入发行包必须单独验证。
+
 ## 第三方依赖原则
 
 - 能用 JDK 解决的简单问题，不额外引库。
-- 依赖版本由根 POM / BOM 统一管理。
+- 依赖版本由根 POM / BOM 统一管理；多 Major Version family 使用独立的版本属性显式 pin。
 - Connector 专用 SDK 放在 Connector 模块，不泄漏到 API。
 - Server 的 HTTP、JSON、日志依赖不能进入 `link-up-api`。
 - 测试依赖使用 test scope。

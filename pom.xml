@@ -38,6 +38,8 @@
         <jackson.version>2.15.4</jackson.version>
         <starrocks.thrift.sdk.version>1.0.1</starrocks.thrift.sdk.version>
         <arrow.version>5.0.0</arrow.version>
+        <elasticsearch7.client.version>7.17.29</elasticsearch7.client.version>
+        <elasticsearch8.client.version>8.19.21</elasticsearch8.client.version>
 
 
     </properties>
