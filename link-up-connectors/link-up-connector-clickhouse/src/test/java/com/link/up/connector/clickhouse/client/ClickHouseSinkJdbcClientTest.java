@@ -6,6 +6,7 @@ import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.type.BasicType;
+import com.link.up.api.table.type.DecimalType;
 import com.link.up.connector.clickhouse.config.ClickHouseSinkConfig;
 import org.junit.Test;
 
@@ -19,37 +20,40 @@ import static org.junit.Assert.assertTrue;
 public class ClickHouseSinkJdbcClientTest {
 
     @Test
-    public void buildsInputFunctionPreparedInsertInPreparedMetadataOrder() {
+    public void buildsInputFunctionPreparedInsertFromStableFluxTypes() {
+        TableSchema source =
+                TableSchema.builder()
+                        .column(Column.builder("id", BasicType.LONG_TYPE).nullable(false).build())
+                        .column(Column.builder("name", BasicType.STRING_TYPE).nullable(true).build())
+                        .build();
         CatalogTable target =
                 CatalogTable.builder(
                                 TablePath.of("analytics", "orders"),
                                 TableSchema.builder()
-                                        .column(Column.builder("id", BasicType.LONG_TYPE).sourceType("Int64").build())
-                                        .column(Column.builder("order`name", BasicType.STRING_TYPE).sourceType("Nullable(String)").build())
+                                        .column(Column.builder("id", BasicType.LONG_TYPE).sourceType("Int128").build())
+                                        .column(Column.builder("order`name", BasicType.STRING_TYPE).sourceType("JSON").build())
                                         .build())
                         .build();
 
         assertEquals(
                 "INSERT INTO `analytics`.`orders` (`id`, `order``name`) SELECT c0, c1 FROM input('c0 Int64, c1 Nullable(String)')",
-                ClickHouseSinkJdbcClient.buildInsertSql(target));
+                ClickHouseSinkJdbcClient.buildInsertSql(target, source));
     }
 
     @Test
-    public void escapesQuotesInsideInputTypeDeclaration() {
-        CatalogTable target =
-                CatalogTable.builder(
-                                TablePath.of("analytics", "orders"),
-                                TableSchema.builder()
-                                        .column(
-                                                Column.builder("kind", BasicType.STRING_TYPE)
-                                                        .sourceType("Enum8('a' = 1, 'b' = 2)")
-                                                        .build())
-                                        .build())
-                        .build();
-
+    public void mapsFluxInputTypesWithoutDependingOnTargetTypeParser() {
         assertEquals(
-                "INSERT INTO `analytics`.`orders` (`kind`) SELECT c0 FROM input('c0 Enum8(\\'a\\' = 1, \\'b\\' = 2)')",
-                ClickHouseSinkJdbcClient.buildInsertSql(target));
+                "UInt8",
+                ClickHouseSinkJdbcClient.inputType(
+                        Column.builder("flag", BasicType.BOOLEAN_TYPE).nullable(false).build()));
+        assertEquals(
+                "Nullable(Decimal(20,0))",
+                ClickHouseSinkJdbcClient.inputType(
+                        Column.builder("u64", new DecimalType(20, 0)).nullable(true).build()));
+        assertEquals(
+                "DateTime64(9)",
+                ClickHouseSinkJdbcClient.inputType(
+                        Column.builder("ts", BasicType.TIMESTAMP_TYPE).nullable(false).build()));
     }
 
     @Test

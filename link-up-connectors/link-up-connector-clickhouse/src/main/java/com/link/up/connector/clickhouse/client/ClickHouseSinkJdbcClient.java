@@ -5,10 +5,15 @@ import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.PrimaryKey;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
+import com.link.up.api.table.type.DecimalType;
+import com.link.up.api.table.type.FluxDataType;
 import com.link.up.api.table.type.FluxRow;
+import com.link.up.api.table.type.SqlType;
 import com.link.up.connector.clickhouse.config.ClickHouseSinkConfig;
 import com.link.up.connector.clickhouse.converter.ClickHousePreparedStatementBinder;
 import com.link.up.connector.clickhouse.schema.ClickHouseTypeMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -25,10 +30,12 @@ import java.util.Properties;
 /** JDBC client for bounded ClickHouse target validation and prepared batch inserts. */
 public final class ClickHouseSinkJdbcClient implements AutoCloseable {
 
+    private static final Logger LOG = LoggerFactory.getLogger(ClickHouseSinkJdbcClient.class);
     private static final String DRIVER_CLASS = "com.clickhouse.jdbc.ClickHouseDriver";
 
     private final ClickHouseSinkConfig config;
     private final CatalogTable targetTable;
+    private final TableSchema sourceSchema;
     private final ClickHousePreparedStatementBinder binder;
 
     private Connection connection;
@@ -41,8 +48,8 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
             TableSchema sourceSchema) {
         this.config = Objects.requireNonNull(config, "config must not be null");
         this.targetTable = Objects.requireNonNull(targetTable, "targetTable must not be null");
-        this.binder = new ClickHousePreparedStatementBinder(
-                Objects.requireNonNull(sourceSchema, "sourceSchema must not be null"));
+        this.sourceSchema = Objects.requireNonNull(sourceSchema, "sourceSchema must not be null");
+        this.binder = new ClickHousePreparedStatementBinder(this.sourceSchema);
         ensureDriver();
     }
 
@@ -100,7 +107,7 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
             throw new IllegalStateException("ClickHouse sink JDBC client is already open");
         }
         connection = openConnection(config);
-        insertStatement = connection.prepareStatement(buildInsertSql(targetTable));
+        insertStatement = connection.prepareStatement(buildInsertSql(targetTable, sourceSchema));
         pendingRows = 0;
     }
 
@@ -126,8 +133,17 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
                 }
             }
         }
-        insertStatement.clearBatch();
+
+        // executeBatch has already crossed the remote durability boundary. Cleanup must not turn
+        // a successful insert into a retryable task failure.
         pendingRows = 0;
+        try {
+            insertStatement.clearBatch();
+        } catch (Exception cleanupFailure) {
+            LOG.warn(
+                    "ClickHouse executeBatch succeeded but clearBatch cleanup failed; the batch is already committed remotely",
+                    cleanupFailure);
+        }
         return rows;
     }
 
@@ -138,27 +154,28 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
         pendingRows = 0;
     }
 
-    static String buildInsertSql(CatalogTable targetTable) {
-        TableSchema schema = targetTable.getTableSchema();
+    static String buildInsertSql(CatalogTable targetTable, TableSchema sourceSchema) {
+        TableSchema targetSchema = targetTable.getTableSchema();
+        if (targetSchema.getColumnCount() != sourceSchema.getColumnCount()) {
+            throw new IllegalArgumentException(
+                    "Prepared ClickHouse source/target column counts differ");
+        }
+
         StringBuilder targetColumns = new StringBuilder();
         StringBuilder selectColumns = new StringBuilder();
         StringBuilder inputSchema = new StringBuilder();
-        for (int index = 0; index < schema.getColumnCount(); index++) {
+        for (int index = 0; index < targetSchema.getColumnCount(); index++) {
             if (index > 0) {
                 targetColumns.append(", ");
                 selectColumns.append(", ");
                 inputSchema.append(", ");
             }
-            Column column = schema.getColumn(index);
+            Column targetColumn = targetSchema.getColumn(index);
+            Column sourceColumn = sourceSchema.getColumn(index);
             String inputName = "c" + index;
-            String sourceType = column.getSourceType();
-            if (sourceType == null || sourceType.trim().isEmpty()) {
-                throw new IllegalArgumentException(
-                        "ClickHouse prepared target column is missing sourceType: " + column.getName());
-            }
-            targetColumns.append(quoteIdentifier(column.getName()));
+            targetColumns.append(quoteIdentifier(targetColumn.getName()));
             selectColumns.append(inputName);
-            inputSchema.append(inputName).append(' ').append(sourceType.trim());
+            inputSchema.append(inputName).append(' ').append(inputType(sourceColumn));
         }
         TablePath path = targetTable.getTablePath();
         return "INSERT INTO "
@@ -172,6 +189,61 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
                 + " FROM input('"
                 + escapeStringLiteral(inputSchema.toString())
                 + "')";
+    }
+
+    static String inputType(Column sourceColumn) {
+        FluxDataType<?> dataType = sourceColumn.getDataType();
+        SqlType sqlType = dataType.getSqlType();
+        String type;
+        switch (sqlType) {
+            case BOOLEAN:
+                // UInt8 works across old/new ClickHouse releases and converts safely to Bool.
+                type = "UInt8";
+                break;
+            case TINYINT:
+                type = "Int8";
+                break;
+            case SMALLINT:
+                type = "Int16";
+                break;
+            case INT:
+                type = "Int32";
+                break;
+            case BIGINT:
+                type = "Int64";
+                break;
+            case FLOAT:
+                type = "Float32";
+                break;
+            case DOUBLE:
+                type = "Float64";
+                break;
+            case DECIMAL:
+                if (!(dataType instanceof DecimalType)) {
+                    throw new IllegalArgumentException(
+                            "ClickHouse Sink DECIMAL source is missing precision/scale metadata: "
+                                    + sourceColumn.getName());
+                }
+                DecimalType decimal = (DecimalType) dataType;
+                type = "Decimal(" + decimal.getPrecision() + "," + decimal.getScale() + ")";
+                break;
+            case STRING:
+                type = "String";
+                break;
+            case DATE:
+                type = "Date32";
+                break;
+            case TIMESTAMP:
+                type = "DateTime64(9)";
+                break;
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported ClickHouse Sink input type for column "
+                                + sourceColumn.getName()
+                                + ": "
+                                + sqlType);
+        }
+        return sourceColumn.isNullable() ? "Nullable(" + type + ")" : type;
     }
 
     static Connection openConnection(ClickHouseSinkConfig config) throws Exception {
@@ -242,17 +314,13 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
         if (insertStatement != null) {
             try {
                 insertStatement.clearBatch();
-            } catch (Exception clearFailure) {
-                failure = clearFailure;
+            } catch (Exception cleanupFailure) {
+                LOG.debug("Failed to discard an unflushed ClickHouse batch during close", cleanupFailure);
             }
             try {
                 insertStatement.close();
             } catch (Exception closeFailure) {
-                if (failure == null) {
-                    failure = closeFailure;
-                } else {
-                    failure.addSuppressed(closeFailure);
-                }
+                failure = closeFailure;
             }
         }
         if (connection != null) {
