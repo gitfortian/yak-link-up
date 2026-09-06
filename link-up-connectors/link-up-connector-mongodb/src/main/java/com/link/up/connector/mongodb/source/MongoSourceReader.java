@@ -124,6 +124,8 @@ public final class MongoSourceReader implements SourceReader<FluxRow, MongoSourc
                     "No prepared schema found for MongoDB collection: " + split.getTablePath());
         }
 
+        MongoBsonRowConverter preparedConverter =
+                new MongoBsonRowConverter(table.getTableSchema());
         MongoCollection<BsonDocument> collection = client
                 .getDatabase(config.getDatabase())
                 .getCollection(config.getCollection(), BsonDocument.class);
@@ -135,7 +137,7 @@ public final class MongoSourceReader implements SourceReader<FluxRow, MongoSourc
         }
 
         MongoCursor<BsonDocument> openedCursor = find.iterator();
-        this.rowConverter = new MongoBsonRowConverter(table.getTableSchema());
+        this.rowConverter = preparedConverter;
         this.currentSplit = split;
         this.cursor = openedCursor;
     }
