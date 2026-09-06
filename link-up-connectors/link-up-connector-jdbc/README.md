@@ -59,6 +59,40 @@ Stage 1 intentionally does not advertise `DATABASE_SNAPSHOT`, TiCDC, TiKV/TiFlas
 checkpoints or runtime schema evolution. Those capabilities require separate stages instead of changing the bounded JDBC
 contract.
 
+## GoldenDB
+
+GoldenDB is exposed as the separate `goldendb` JDBC dialect while Stage 1 reuses the MySQL-compatible execution path and
+MySQL Connector/J. Because MySQL, TiDB and GoldenDB can share the `jdbc:mysql://` URL scheme, GoldenDB must be selected
+explicitly with `dialect = "goldendb"` instead of being inferred from the URL:
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:mysql://goldendb:3306/app"
+  driver = "com.mysql.cj.jdbc.Driver"
+  dialect = "goldendb"
+  table_path = "app.orders"
+}
+
+sink {
+  type = "jdbc"
+  url = "jdbc:mysql://goldendb:3306/archive"
+  driver = "com.mysql.cj.jdbc.Driver"
+  dialect = "goldendb"
+}
+```
+
+The Stage 1 GoldenDB adapter supports bounded single-table and multi-table reads, MySQL-compatible automatic type
+mapping, shared JDBC range/hash split planning, INSERT/UPSERT, batch writes and metadata discovery. Sink target database
+resolution prefers the database in the target JDBC URL so source database metadata does not leak into a cross-database
+write.
+
+GoldenDB Stage 1 writes existing target tables only. Automatic database/table creation, table recreation, add-column
+schema evolution and other distribution/sharding-sensitive DDL are intentionally blocked. Create the GoldenDB target
+schema/table before the job; `CREATE_SCHEMA_WHEN_NOT_EXIST` remains safe for an existing table but fails clearly when the
+target table is absent. CDC, streaming, GoldenDB-native bulk loading and coordinated distributed snapshots are also out
+of scope for this bounded JDBC stage.
+
 ## SAP HANA
 
 SAP HANA is exposed as the `hana` JDBC dialect and is auto-detected from `jdbc:sap://` URLs. Stage 1 is deliberately
