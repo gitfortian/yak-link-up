@@ -35,7 +35,7 @@ Yak Link Up 优先复用已有执行模型，再增加数据库差异层。新�
 
 ## Native OLAP Connector
 
-当数据库提供的原生批量协议明显不同于 JDBC 执行模型，并且这些协议是 Connector 正确性或性能语义的一部分时，可以使用独立 Connector，而不是把原生协议塞进 `link-up-connector-jdbc`。
+当数据库提供的原生批量协议或物理分片模型明显不同于 JDBC 执行模型，并且这些能力是 Connector 正确性或性能语义的一部分时，可以使用独立 Connector，而不是把数据库特有规划逻辑塞进 `link-up-connector-jdbc`。
 
 StarRocks 使用独立的 `link-up-connector-starrocks`：
 
@@ -48,7 +48,25 @@ StarRocks 使用独立的 `link-up-connector-starrocks`：
 - Stream Load 成功 flush 已经是远端独立提交；没有真正 2PC 时，不把 Link-Up 的 `commit/abort` 生命周期包装成 Job-level exactly once。
 - Stage 2 不使用 JDBC 自动建表，也不声明 CDC / DELETE / runtime schema evolution 能力。
 
-这种例外是协议边界，不是为数据库复制通用执行框架。Source 仍复用 Link-Up 的 `SourceSplitEnumerator`、动态 Split 分配、`SourceReader`、Channel、Metrics 和 Job 生命周期；Sink 仍复用 `SinkPreparer`、`SinkWriter`、Task commit evidence 和统一错误传播。
+Doris 的 bounded Native Source 同样属于独立 OLAP 数据面：
+
+- Catalog 元数据继续使用 Doris 的 MySQL-compatible protocol，避免重复实现稳定的 schema discovery。
+- 数据读取使用 FE `/_query_plan` + BE `TDorisExternalService` Scanner，BE 返回 Arrow IPC 后转换为 `FluxRow`。
+- Tablet/BE 路由由 `SourceSplitEnumerator` 转成确定性的 bounded splits。
+- 该 Source 不把 Doris Binlog/CDC 或 Arrow Flight SQL 混入当前离线读取阶段。
+
+ClickHouse 使用独立的 `link-up-connector-clickhouse`，但不重复实现网络协议：
+
+- 元数据与数据传输复用 ClickHouse 官方 Java/JDBC HTTP client。
+- MergeTree-family table mode 从 `system.parts` 读取 `active = 1` 的当前 parts，并按 `split.size` 形成 `_part` bounded splits。
+- `partition_list` 只约束 part discovery；`filter_query` 继续由 ClickHouse 服务端过滤。
+- local table 配置多个 host 时，每个 host 被视为一个 shard 节点；不要把同一 shard 的多个 replica 当成独立 host，以免重复读取相同 parts。
+- `Distributed` table 在第一阶段由一个 bounded query 交给 ClickHouse 自己做集群分发，不枚举每个 replica。
+- 自定义 SQL 第一阶段是单 bounded split，不自动改写 JOIN/GROUP BY/subquery 到多个 shard；复杂 SQL 并行重写留给独立阶段。
+- 高位无符号/128-bit/256-bit 数值不做有损缩窄；复杂 ARRAY/MAP/TUPLE/NESTED/AggregateFunction 在没有明确 Flux 语义前 fail-fast。
+- Stage 1 不包含 CDC、连续轮询、mutation/Keeper change capture、runtime schema evolution 或 Sink。
+
+这种例外是协议/物理分片边界，不是为数据库复制通用执行框架。Source 仍复用 Link-Up 的 `SourceSplitEnumerator`、动态 Split 分配、`SourceReader`、Channel、Metrics 和 Job 生命周期；Sink 仍复用 `SinkPreparer`、`SinkWriter`、Task commit evidence 和统一错误传播。
 
 ## 数据库差异不要强行抹平
 

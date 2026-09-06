@@ -19,6 +19,7 @@
         <module>link-up-connector-doris</module>
         <module>link-up-connector-http</module>
         <module>link-up-connector-starrocks</module>
+        <module>link-up-connector-clickhouse</module>
     </modules>
 
 </project>
