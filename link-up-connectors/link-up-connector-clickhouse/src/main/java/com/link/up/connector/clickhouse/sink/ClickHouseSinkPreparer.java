@@ -14,6 +14,7 @@ import com.link.up.connector.clickhouse.client.ClickHouseSinkJdbcClient;
 import com.link.up.connector.clickhouse.config.ClickHouseSinkConfig;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /** Validates one bounded ClickHouse target before task writers start. */
@@ -58,9 +59,9 @@ final class ClickHouseSinkPreparer implements SinkPreparer {
         TableSchema target = targetTable.getTableSchema();
         if (source.getColumnCount() != target.getColumnCount()) {
             throw new IllegalArgumentException(
-                    "ClickHouse Sink Stage 2 requires source and target to have the same column count: source="
+                    "ClickHouse Sink Stage 2 requires the source fields to match all writable target fields: source="
                             + source.getColumnCount()
-                            + ", target="
+                            + ", writableTarget="
                             + target.getColumnCount());
         }
 
@@ -96,6 +97,18 @@ final class ClickHouseSinkPreparer implements SinkPreparer {
             throw new IllegalArgumentException(
                     "Nullable source column cannot be written to non-null ClickHouse target: "
                             + source.getName());
+        }
+
+        if (isInteger(sourceType)
+                && isUnsignedClickHouseType(target.getSourceType())
+                && !isExplicitlyUnsigned(source.getSourceType())) {
+            throw new IllegalArgumentException(
+                    "Signed/unknown integer source cannot be treated as a safe widening into unsigned ClickHouse target for column "
+                            + source.getName()
+                            + ": sourceType="
+                            + source.getSourceType()
+                            + ", targetType="
+                            + target.getSourceType());
         }
 
         if (sourceType == targetType) {
@@ -173,6 +186,37 @@ final class ClickHouseSinkPreparer implements SinkPreparer {
                             + ", target="
                             + targetDecimal);
         }
+    }
+
+    private static boolean isUnsignedClickHouseType(String sourceType) {
+        String value = unwrapTargetType(sourceType);
+        return value != null && value.toUpperCase(Locale.ROOT).startsWith("UINT");
+    }
+
+    private static boolean isExplicitlyUnsigned(String sourceType) {
+        if (sourceType == null) {
+            return false;
+        }
+        String upper = sourceType.trim().toUpperCase(Locale.ROOT);
+        return upper.startsWith("UINT") || upper.contains(" UNSIGNED");
+    }
+
+    private static String unwrapTargetType(String sourceType) {
+        if (sourceType == null) {
+            return null;
+        }
+        String value = sourceType.trim();
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            if ((value.regionMatches(true, 0, "Nullable(", 0, "Nullable(".length())
+                            || value.regionMatches(true, 0, "LowCardinality(", 0, "LowCardinality(".length()))
+                    && value.endsWith(")")) {
+                value = value.substring(value.indexOf('(') + 1, value.length() - 1).trim();
+                changed = true;
+            }
+        }
+        return value;
     }
 
     private static boolean isInteger(SqlType type) {

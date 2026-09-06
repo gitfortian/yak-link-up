@@ -30,13 +30,13 @@ public class ClickHouseSinkJdbcClientTest {
                 CatalogTable.builder(
                                 TablePath.of("analytics", "orders"),
                                 TableSchema.builder()
-                                        .column(Column.builder("id", BasicType.LONG_TYPE).sourceType("Int128").build())
+                                        .column(Column.builder("id", BasicType.STRING_TYPE).sourceType("Int128").build())
                                         .column(Column.builder("order`name", BasicType.STRING_TYPE).sourceType("JSON").build())
                                         .build())
                         .build();
 
         assertEquals(
-                "INSERT INTO `analytics`.`orders` (`id`, `order``name`) SELECT c0, c1 FROM input('c0 Int64, c1 Nullable(String)')",
+                "INSERT INTO `analytics`.`orders` (`id`, `order``name`) SELECT CAST(c0 AS Int128), CAST(c1 AS JSON) FROM input('c0 Int64, c1 Nullable(String)')",
                 ClickHouseSinkJdbcClient.buildInsertSql(target, source));
     }
 

@@ -172,9 +172,20 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
             }
             Column targetColumn = targetSchema.getColumn(index);
             Column sourceColumn = sourceSchema.getColumn(index);
+            String targetSourceType = targetColumn.getSourceType();
+            if (targetSourceType == null || targetSourceType.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Prepared ClickHouse target column is missing sourceType: "
+                                + targetColumn.getName());
+            }
             String inputName = "c" + index;
             targetColumns.append(quoteIdentifier(targetColumn.getName()));
-            selectColumns.append(inputName);
+            selectColumns
+                    .append("CAST(")
+                    .append(inputName)
+                    .append(" AS ")
+                    .append(targetSourceType.trim())
+                    .append(')');
             inputSchema.append(inputName).append(' ').append(inputType(sourceColumn));
         }
         TablePath path = targetTable.getTablePath();
@@ -197,7 +208,6 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
         String type;
         switch (sqlType) {
             case BOOLEAN:
-                // UInt8 works across old/new ClickHouse releases and converts safely to Bool.
                 type = "UInt8";
                 break;
             case TINYINT:
@@ -259,8 +269,6 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
             properties.setProperty("server_time_zone", config.getServerTimeZone());
             properties.setProperty("use_server_time_zone", "true");
         }
-        // Keep the bounded writer's durability boundary stable even when ClickHouse 26.3+
-        // enables async inserts by default at server/user level.
         properties.setProperty("async_insert", "0");
         properties.setProperty("wait_for_async_insert", "1");
         return DriverManager.getConnection(url, properties);
