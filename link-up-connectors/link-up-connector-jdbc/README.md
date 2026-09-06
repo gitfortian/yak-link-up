@@ -93,6 +93,27 @@ schema/table before the job; `CREATE_SCHEMA_WHEN_NOT_EXIST` remains safe for an 
 target table is absent. CDC, streaming, GoldenDB-native bulk loading and coordinated distributed snapshots are also out
 of scope for this bounded JDBC stage.
 
+## GBase family
+
+GBase is modeled as a database family, not as one generic JDBC dialect. The stable product identities are `gbase8c`,
+`gbase8a` and `gbase8s`. A generic `gbase` dialect is intentionally not defined because the three products use different
+JDBC protocols and database semantics.
+
+The family scaffold only provides stable product metadata and family-level helpers. It deliberately does **not** register
+`JdbcDialectFactory` implementations yet, so these identifiers do not advertise runtime support before their concrete
+URL, driver, catalog, type-mapping and SQL behavior is implemented and tested.
+
+Shared GBase code must remain product-neutral. Driver names, JDBC URL parsing, identifier rules, catalog behavior, type
+mapping, row conversion, INSERT/UPSERT SQL and distribution/MPP behavior belong to the concrete product adapter unless at
+least two completed adapters prove the behavior is genuinely common. The planned bounded/offline implementation order is:
+
+1. GBase 8c Source, then existing-table Sink.
+2. GBase 8a Source, then existing-table JDBC Sink; native/high-speed MPP loading is a later stage.
+3. GBase 8s Source, then existing-table Sink.
+
+CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths are outside
+this scaffold.
+
 ## SAP HANA
 
 SAP HANA is exposed as the `hana` JDBC dialect and is auto-detected from `jdbc:sap://` URLs. Stage 1 is deliberately

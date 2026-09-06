@@ -10,6 +10,9 @@ public final class DatabaseIdentifier {
     public static final String MYSQL = "mysql";
     public static final String TIDB = "tidb";
     public static final String GOLDENDB = "goldendb";
+    public static final String GBASE8C = "gbase8c";
+    public static final String GBASE8A = "gbase8a";
+    public static final String GBASE8S = "gbase8s";
     public static final String POSTGRESQL = "postgresql";
     public static final String ORACLE = "oracle";
     public static final String SQLSERVER = "sqlserver";
