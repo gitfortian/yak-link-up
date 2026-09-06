@@ -43,6 +43,7 @@ public final class Elasticsearch7DocumentConverter {
         if (sourceSchema.getColumnCount() != targetSchema.getColumnCount()) {
             throw new IllegalArgumentException("Prepared Elasticsearch target schema must match source field count");
         }
+        validateNoOverlappingFieldPaths(sourceSchema);
         this.documentIdIndex =
                 documentIdField == null ? -1 : sourceSchema.indexOf(documentIdField);
         if (documentIdField != null && documentIdIndex < 0) {
@@ -85,6 +86,21 @@ public final class Elasticsearch7DocumentConverter {
             }
         }
         return new Document(documentId, document);
+    }
+
+    private static void validateNoOverlappingFieldPaths(TableSchema schema) {
+        List<Column> columns = schema.getColumns();
+        for (int leftIndex = 0; leftIndex < columns.size(); leftIndex++) {
+            String left = columns.get(leftIndex).getName();
+            for (int rightIndex = leftIndex + 1; rightIndex < columns.size(); rightIndex++) {
+                String right = columns.get(rightIndex).getName();
+                if (left.startsWith(right + ".") || right.startsWith(left + ".")) {
+                    throw new IllegalArgumentException(
+                            "Overlapping Elasticsearch document field paths are not supported: "
+                                    + left + " and " + right);
+                }
+            }
+        }
     }
 
     private static Object convertValue(
@@ -235,10 +251,11 @@ public final class Elasticsearch7DocumentConverter {
                         "Conflicting Elasticsearch dotted field path: " + path);
             }
         }
-        Object old = current.put(parts[parts.length - 1], value);
-        if (old != null) {
+        String leaf = parts[parts.length - 1];
+        if (current.containsKey(leaf)) {
             throw new IllegalArgumentException("Duplicate Elasticsearch document field path: " + path);
         }
+        current.put(leaf, value);
     }
 
     public static final class Document {
