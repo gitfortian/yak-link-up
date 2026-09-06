@@ -3,18 +3,16 @@ package com.link.up.connector.elasticsearch8.client;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.ClearScrollRequest;
+import co.elastic.clients.elasticsearch.core.InfoResponse;
 import co.elastic.clients.elasticsearch.core.ScrollRequest;
 import co.elastic.clients.elasticsearch.core.ScrollResponse;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
-import co.elastic.clients.elasticsearch.core.InfoResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch.core.search.ResponseBody;
 import co.elastic.clients.elasticsearch.indices.GetMappingResponse;
 import co.elastic.clients.elasticsearch.indices.get_mapping.IndexMappingRecord;
 import co.elastic.clients.json.jackson.JacksonJsonpMapper;
-import co.elastic.clients.transport.rest_client.RestClientTransport;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
@@ -23,17 +21,9 @@ import com.link.up.connector.elasticsearch8.config.Elasticsearch8SourceConfig;
 import com.link.up.connector.elasticsearch8.schema.Elasticsearch8TypeMapper;
 import com.link.up.connector.elasticsearch8.source.Elasticsearch8SourceSplit;
 import jakarta.json.stream.JsonParser;
-import org.apache.http.HttpHost;
-import org.apache.http.auth.AuthScope;
-import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.impl.client.BasicCredentialsProvider;
-import org.elasticsearch.client.RestClient;
-import org.elasticsearch.client.RestClientBuilder;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -44,16 +34,20 @@ import java.util.Objects;
 public final class Elasticsearch8Client implements AutoCloseable {
 
     private final Elasticsearch8SourceConfig config;
+    private final Elasticsearch8ClientResources resources;
     private final JacksonJsonpMapper jsonpMapper;
-    private final RestClientTransport transport;
     private final ElasticsearchClient client;
 
     public Elasticsearch8Client(Elasticsearch8SourceConfig config) {
         this.config = Objects.requireNonNull(config, "config must not be null");
-        RestClient restClient = buildRestClient(config);
-        this.jsonpMapper = new JacksonJsonpMapper(new ObjectMapper());
-        this.transport = new RestClientTransport(restClient, jsonpMapper);
-        this.client = new ElasticsearchClient(transport);
+        this.resources = Elasticsearch8ClientResources.create(
+                config.getHosts(),
+                config.getUsername(),
+                config.getPassword(),
+                config.getConnectTimeoutMs(),
+                config.getSocketTimeoutMs());
+        this.jsonpMapper = resources.getJsonpMapper();
+        this.client = resources.getClient();
     }
 
     public void verifyMajorVersion() throws IOException {
@@ -145,8 +139,7 @@ public final class Elasticsearch8Client implements AutoCloseable {
         if (scrollId == null || scrollId.trim().isEmpty()) {
             return;
         }
-        ClearScrollRequest request = ClearScrollRequest.of(builder -> builder.scrollId(scrollId));
-        client.clearScroll(request);
+        client.clearScroll(ClearScrollRequest.of(builder -> builder.scrollId(scrollId)));
     }
 
     private Query parseQuery(String json) {
@@ -175,42 +168,6 @@ public final class Elasticsearch8Client implements AutoCloseable {
         return new ScrollPage(response.scrollId(), documents);
     }
 
-    private static RestClient buildRestClient(Elasticsearch8SourceConfig config) {
-        HttpHost[] hosts = new HttpHost[config.getHosts().size()];
-        for (int index = 0; index < config.getHosts().size(); index++) {
-            hosts[index] = toHttpHost(config.getHosts().get(index));
-        }
-
-        RestClientBuilder builder = RestClient.builder(hosts);
-        builder.setRequestConfigCallback(
-                request -> request
-                        .setConnectTimeout(config.getConnectTimeoutMs())
-                        .setSocketTimeout(config.getSocketTimeoutMs()));
-        if (!config.getUsername().isEmpty()) {
-            BasicCredentialsProvider credentials = new BasicCredentialsProvider();
-            credentials.setCredentials(
-                    AuthScope.ANY,
-                    new UsernamePasswordCredentials(config.getUsername(), config.getPassword()));
-            builder.setHttpClientConfigCallback(
-                    http -> http.setDefaultCredentialsProvider(credentials));
-        }
-        return builder.build();
-    }
-
-    private static HttpHost toHttpHost(String value) {
-        final URI uri;
-        try {
-            uri = new URI(value);
-        } catch (URISyntaxException failure) {
-            throw new IllegalArgumentException("Invalid Elasticsearch host: " + value, failure);
-        }
-        int port = uri.getPort();
-        if (port < 0) {
-            port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 9200;
-        }
-        return new HttpHost(uri.getHost(), port, uri.getScheme());
-    }
-
     private static String requireText(String value, String name) {
         if (value == null || value.trim().isEmpty()) {
             throw new IllegalArgumentException(name + " must not be empty");
@@ -220,7 +177,7 @@ public final class Elasticsearch8Client implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        transport.close();
+        resources.close();
     }
 
     /** One connector-neutral scroll page; SDK response types do not leak into the Reader. */
