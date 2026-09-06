@@ -163,7 +163,9 @@ public final class Elasticsearch8DocumentConverter {
         if (isStructuredTarget(target)) {
             String trimmed = value.trim();
             if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
-                if ("geo_point".equals(target) || "completion".equals(target)) {
+                if ("geo_point".equals(target)
+                        || "completion".equals(target)
+                        || "join".equals(target)) {
                     return value;
                 }
                 throw new IllegalArgumentException(
@@ -185,14 +187,20 @@ public final class Elasticsearch8DocumentConverter {
         return "object".equals(target)
                 || "nested".equals(target)
                 || "flattened".equals(target)
+                || "geo_point".equals(target)
                 || "geo_shape".equals(target)
                 || "shape".equals(target)
                 || "point".equals(target)
                 || "dense_vector".equals(target)
                 || "sparse_vector".equals(target)
+                || "rank_vectors".equals(target)
                 || "histogram".equals(target)
-                || target.endsWith("_range")
-                || "rank_features".equals(target);
+                || "aggregate_metric_double".equals(target)
+                || "rank_features".equals(target)
+                || "completion".equals(target)
+                || "join".equals(target)
+                || "percolator".equals(target)
+                || target.endsWith("_range");
     }
 
     private static Map<String, Object> rowToMap(
