@@ -160,6 +160,15 @@ public final class DorisBeReadClient implements AutoCloseable {
                 }
                 eos = result.isEos();
                 byte[] payload = result.getRows();
+                if (!eos && (payload == null || payload.length == 0)) {
+                    throw new IOException(
+                            "Doris BE getNext returned an empty Arrow payload before EOS: be="
+                                    + partition.getBeAddress()
+                                    + ", contextId="
+                                    + contextId
+                                    + ", offset="
+                                    + readerOffset);
+                }
                 currentRows =
                         payload == null || payload.length == 0
                                 ? Collections.<FluxRow>emptyList()
