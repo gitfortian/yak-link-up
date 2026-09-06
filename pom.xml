@@ -40,6 +40,7 @@
         <arrow.version>5.0.0</arrow.version>
         <elasticsearch7.client.version>7.17.29</elasticsearch7.client.version>
         <elasticsearch8.client.version>8.19.21</elasticsearch8.client.version>
+        <elasticsearch8.jackson2.version>2.18.8</elasticsearch8.jackson2.version>
 
 
     </properties>

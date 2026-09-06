@@ -27,11 +27,31 @@
         </dependency>
 
         <dependency>
+            <groupId>com.google.auto.service</groupId>
+            <artifactId>auto-service</artifactId>
+            <version>${auto-service.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+
+        <!-- elasticsearch-java 8.19.21 compiles its JacksonJsonpMapper against Jackson 2.18.8 as compileOnly. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${elasticsearch8.jackson2.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>co.elastic.clients</groupId>
             <artifactId>elasticsearch-java</artifactId>
             <version>${elasticsearch8.client.version}</version>
             <exclusions>
-                <!-- Jackson 3 requires Java 17. Link-Up remains on Java 8 in Stage 0. -->
+                <!-- Jackson 3 requires Java 17. Stage 3 explicitly uses JacksonJsonpMapper (Jackson 2). -->
                 <exclusion>
                     <groupId>tools.jackson.core</groupId>
                     <artifactId>jackson-core</artifactId>
