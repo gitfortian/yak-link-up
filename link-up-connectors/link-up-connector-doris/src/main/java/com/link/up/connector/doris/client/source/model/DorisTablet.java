@@ -1,11 +1,14 @@
 package com.link.up.connector.doris.client.source.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /** Tablet routing returned by the Doris FE Query Plan endpoint. */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public final class DorisTablet implements Serializable {
 
     private static final long serialVersionUID = 1L;
