@@ -2,21 +2,27 @@
 
 MongoDB follows Link-Up's bounded/offline boundary. The product goal is usability first: users select a database, collection and fields; they do not declare BSON or Link-Up field types.
 
+## Status
+
+```text
+Stage 1  Catalog + automatic schema discovery     DONE (#117)
+Stage 2  bounded MongoDB Source                   DONE (#118)
+Stage 3  bounded MongoDB Sink                     DONE in this PR
+```
+
+After Stage 3, the connector has a complete single-collection bounded Source/Sink path. CDC, multi-collection execution and generic partition splitting remain separate future work rather than being mixed into the core offline contract.
+
 ## Stage 1 — Catalog and automatic schema discovery
 
-Stage 1 established the metadata boundary:
+MongoDB has no enforced table schema. Link-Up therefore treats:
 
-- module `link-up-connector-mongodb`
-- MongoDB Java synchronous driver 4.11.5
-- database -> MongoDB database
-- table -> collection
-- automatic sampled schema discovery
-- BSON -> canonical Link-Up type inference
-- numeric widening and heterogeneous-type fallback
-- dotted nested field discovery for BSON documents
-- conservative JSON/STRING boundary for documents and arrays
-- `_id` primary-key metadata when discovered
-- synthetic `_id` metadata for an empty collection
+```text
+MongoDB database   -> Link-Up database
+MongoDB collection -> Link-Up table
+MongoDB field      -> Link-Up column
+```
+
+`MongoCatalog#getTable` samples collection documents and synthesizes a stable `TableSchema`.
 
 Default discovery limits are connector-internal:
 
@@ -27,7 +33,7 @@ schema max depth   = 8
 
 Yak Ops should not ask users to provide field types.
 
-## BSON type policy
+### BSON -> Link-Up discovery policy
 
 ```text
 ObjectId        -> STRING
@@ -50,9 +56,9 @@ Physical BSON information remains in `Column.sourceType` and `Column.attributes`
 
 Schema discovery observes multiple documents rather than trusting the first one. Numeric values widen when safe and incompatible shapes degrade to STRING. Missing sampled fields become nullable.
 
-## Nested documents
+### Nested documents
 
-A document field remains a JSON string boundary and its child fields are also discovered as dotted paths.
+A document field remains a JSON string boundary and child fields are also discovered as dotted paths.
 
 ```json
 {
@@ -73,11 +79,11 @@ address.province
 address.city
 ```
 
-This keeps the Link-Up row schema flat while allowing a future Yak Ops field picker to render a tree.
+This keeps the Link-Up row schema flat while allowing Yak Ops to render a field tree.
 
 ## Stage 2 — bounded MongoDB Source
 
-Stage 2 adds the finite read path:
+The finite read path is:
 
 ```text
 MongoDB collection
@@ -89,9 +95,9 @@ MongoDB collection
   -> FluxRow
 ```
 
-The Source exposes only `TABLE_SCHEMA_DISCOVERY`. It deliberately does not advertise `PARTITION_SPLIT` or `MULTI_TABLE` yet.
+The Source exposes only `TABLE_SCHEMA_DISCOVERY`. It does not advertise `PARTITION_SPLIT` or `MULTI_TABLE`.
 
-### Configuration
+### Source configuration
 
 Minimal configuration:
 
@@ -114,17 +120,10 @@ source {
 }
 ```
 
-Field selection requires names only, never types:
+Field selection requires names only:
 
 ```hocon
-source {
-  type = "mongodb"
-  uri = "mongodb://127.0.0.1:27017/app"
-  collection = "users"
-
-  fields = ["_id", "username", "address.city", "created_at"]
-  fetch_size = 1000
-}
+fields = ["_id", "username", "address.city", "created_at"]
 ```
 
 An optional bounded `find` filter accepts MongoDB Extended JSON:
@@ -133,62 +132,174 @@ An optional bounded `find` filter accepts MongoDB Extended JSON:
 filter = """{"status":"ACTIVE"}"""
 ```
 
-### Projection
+Explicit fields are pushed down to MongoDB. If both a parent and child are selected, only the parent is sent in the server projection, while the row converter still derives both Link-Up fields.
 
-Explicit `fields` are pushed down to MongoDB. Dotted paths are supported.
+A later document that conflicts with a strongly inferred scalar type fails explicitly instead of being silently coerced.
 
-If both a parent and one of its children are selected, for example:
+Stage 2 always uses one full-collection split. `_id` is not guaranteed to be ObjectId or generically range-partitionable, so reader parallelism does not manufacture unsafe split semantics.
+
+## Stage 3 — bounded MongoDB Sink
+
+The bounded write path is:
+
+```text
+FluxRow
+  -> prepared source TableSchema
+  -> MongoFluxRowBsonConverter
+  -> ordered local document buffer
+  -> insertMany(ordered=true)
+  -> MongoDB acknowledgement
+```
+
+Stage 3 is deliberately INSERT-only. It does not expose `UPSERT`, `AUTO_CREATE_TABLE`, `MULTI_TABLE` or two-phase-commit capabilities.
+
+### Sink configuration
+
+Minimal configuration:
+
+```hocon
+sink {
+  type = "mongodb"
+  uri = "mongodb://127.0.0.1:27017/archive"
+  collection = "users_copy"
+}
+```
+
+When the URI has no database:
+
+```hocon
+sink {
+  type = "mongodb"
+  uri = "mongodb://127.0.0.1:27017"
+  database = "archive"
+  collection = "users_copy"
+}
+```
+
+Optional batching and stable document identity:
+
+```hocon
+sink {
+  type = "mongodb"
+  uri = "mongodb://127.0.0.1:27017/archive"
+  collection = "orders"
+
+  batch_size = 1000
+  document_id_field = "order_id"
+}
+```
+
+`document_id_field` copies one existing source field to MongoDB `_id`. The original source field is still retained in the document. If the source schema already contains `_id`, configuring another `document_id_field` is rejected as ambiguous.
+
+If the source contains `_id`, Stage 3 preserves it. A null implicit `_id` is omitted so MongoDB may generate one. When Stage 1 metadata proves that a STRING originated from BSON ObjectId, Stage 3 restores the 24-hex value to a real BSON ObjectId for MongoDB-to-MongoDB round trips.
+
+### Target collection creation
+
+MongoDB naturally creates a missing collection on the first successful insert. Stage 3 allows that native behavior, but does not advertise Link-Up `AUTO_CREATE_TABLE`: the connector does not run an explicit collection-DDL contract, configure validators, or evolve target schema.
+
+### Link-Up -> BSON policy
+
+```text
+STRING          -> BsonString
+Mongo ObjectId STRING metadata -> BsonObjectId
+Mongo Extended JSON STRING metadata -> original BSON Document/Array when unambiguous
+BOOLEAN         -> BsonBoolean
+TINYINT         -> BsonInt32
+SMALLINT        -> BsonInt32
+INT             -> BsonInt32
+BIGINT          -> BsonInt64
+FLOAT           -> BsonDouble
+DOUBLE          -> BsonDouble
+DECIMAL         -> BsonDecimal128
+BYTES           -> BsonBinary
+DATE            -> ISO-8601 BsonString
+TIME            -> ISO-8601 BsonString
+TIMESTAMP       -> BsonDateTime when millisecond-exact
+TIMESTAMP_TZ    -> ISO-8601 BsonString preserving offset
+NULL            -> BsonNull
+```
+
+MongoDB BSON DateTime has millisecond precision. A Link-Up TIMESTAMP containing sub-millisecond precision is rejected instead of being silently truncated.
+
+Native Link-Up ARRAY/MAP/ROW values are not accepted in Stage 3. MongoDB-origin documents and arrays already cross the generic pipeline as STRING + Extended JSON metadata, which Stage 3 can restore when the metadata is unambiguous.
+
+### Dotted paths and Mongo round trips
+
+Relational dotted field names are interpreted as MongoDB nested paths:
+
+```text
+customer.name -> { "customer": { "name": ... } }
+```
+
+Ordinary overlapping paths such as `customer` plus `customer.name` are rejected because the result would otherwise depend on write order.
+
+MongoDB-origin parent documents are a special safe case. When Stage 1 metadata proves that `address` is an Extended-JSON Mongo Document, Stage 3 allows both:
 
 ```text
 address
 address.city
 ```
 
-only the parent path is sent in the MongoDB projection to avoid a parent/child projection collision. The row converter still derives both selected Link-Up fields from the returned document.
+The parent document is restored first and the explicit child field deterministically overwrites that nested value. This keeps the default MongoDB Source schema usable for MongoDB-to-MongoDB copy jobs.
 
-When no fields are selected, Stage 2 reads the full document. This avoids manufacturing a projection from sampled metadata and remains robust when the collection contains fields that were not seen during discovery.
+### Flush and durability boundary
 
-### Runtime conversion and schema drift
-
-The prepared `TableSchema` remains authoritative while a bounded task is running.
-
-- ObjectId is emitted as its hex STRING form.
-- DateTime/Timestamp values become UTC `LocalDateTime` values.
-- Documents, arrays and other STRING fallback values use Extended JSON.
-- Missing fields become null.
-- Safe numeric widening follows the discovered Link-Up type.
-- A later document that conflicts with a strongly inferred scalar type fails explicitly instead of being silently coerced.
-
-This is deliberate: a sampled schema can never prove that every document in a schema-less collection has the same shape. Silent coercion would make downstream relational writes harder to reason about.
-
-### Single-split boundary
-
-Stage 2 always creates one full-collection split, even when Source reader parallelism is greater than one.
-
-This is intentional. MongoDB `_id` is not guaranteed to be an ObjectId and may be a string, integer, UUID, compound/application value, or another BSON type. Stage 2 does not pretend that a safe generic range partition exists.
-
-A later hardening stage may add explicit range/chunk planning with a conservative single-split fallback.
-
-### Bounded does not mean transactional snapshot
-
-Stage 2 executes one finite MongoDB `find` cursor. It does not claim a point-in-time multi-reader database snapshot or exactly-once snapshot semantics. Concurrent application updates may affect what MongoDB returns according to the server/read-concern configuration supplied by the connection URI.
-
-## Explicit non-goals for Stage 2
-
-- MongoDB Sink
-- multi-collection execution
-- automatic partition/range split planning
-- Change Streams / oplog / CDC
-- realtime polling
-- checkpoint/savepoint
-- automatic runtime schema evolution
-- user-authored schema/type configuration
-- job-level exactly-once snapshot claims
-
-## Next stage
+`batch_size` defaults to 1000 documents.
 
 ```text
-Stage 1  Catalog + schema discovery              DONE
-Stage 2  bounded MongoDB Source                  DONE in this PR
-Stage 3  bounded MongoDB Sink + offline hardening
+write()
+  -> buffer documents
+  -> threshold reached
+  -> ordered insertMany
+
+prepareCommit()
+  -> flush remaining documents
+
+commit()
+  -> task lifecycle boundary only
+
+abort()
+  -> discard only unsent local buffer
+
+close()
+  -> never implicitly flush
 ```
+
+Every successful `insertMany` is already a remote write and cannot be rolled back by a later task abort. The writer therefore reports `TASK_LOCAL` commit scope and makes no Job-level atomicity or exactly-once claim.
+
+The target write concern must be acknowledged. Stronger write concerns configured in the MongoDB URI remain valid; an unacknowledged write concern is rejected.
+
+### Failure and retry boundary
+
+Stage 3 does not automatically replay a failed `insertMany` request.
+
+Even with `ordered=true`, MongoDB may have committed a prefix of the batch before returning an error such as a duplicate key. A network failure may also leave the exact remote outcome unclear. After one insert failure, the writer enters a failed state and refuses additional writes or `prepareCommit` replay.
+
+Whole-task retry therefore requires target verification. Stable `_id` values can make duplicate detection easier, but they do not turn this INSERT Sink into an UPSERT or exactly-once connector.
+
+## Explicit non-goals
+
+The completed bounded connector still deliberately excludes:
+
+- Change Streams / oplog / CDC
+- realtime polling or streaming semantics
+- automatic runtime schema evolution
+- update / replace / delete operations
+- exposed UPSERT semantics
+- multi-collection execution / `MULTI_TABLE`
+- generic automatic range/chunk Source splitting / `PARTITION_SPLIT`
+- checkpoint/savepoint recovery
+- job-level exactly-once or point-in-time snapshot claims
+- MongoDB transactions spanning Link-Up SinkTasks
+
+## Future optional hardening
+
+Future work should only be added when the semantics are explicit:
+
+```text
+safe Source range/chunk planning with single-split fallback
+multi-collection source/sink routing with explicit target mapping
+optional collection validators / explicit create semantics
+```
+
+These are intentionally not required for the core usability goal: select a MongoDB database/collection/fields and run a bounded offline synchronization job without manually declaring types.
