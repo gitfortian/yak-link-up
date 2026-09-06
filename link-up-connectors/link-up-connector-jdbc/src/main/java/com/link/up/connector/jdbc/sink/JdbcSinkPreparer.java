@@ -137,6 +137,10 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return TiDbSinkSupport.resolveTargetPath(
                     config.getConnectionConfig(), tablePath);
         }
+        if (GoldenDbSinkSupport.accepts(config.getConnectionConfig())) {
+            return GoldenDbSinkSupport.resolveTargetPath(
+                    config.getConnectionConfig(), tablePath);
+        }
         return JdbcCreateTableSqlResolver.resolveTargetPath(
                 config.getConnectionConfig(), tablePath);
     }
@@ -161,6 +165,9 @@ final class JdbcSinkPreparer implements SinkPreparer {
         if (TiDbSinkSupport.accepts(config.getConnectionConfig())) {
             return TiDbSinkSupport.resolveCreateTableSql(
                     config.getConnectionConfig(), table);
+        }
+        if (GoldenDbSinkSupport.accepts(config.getConnectionConfig())) {
+            return null;
         }
         return JdbcCreateTableSqlResolver.resolve(
                 dialect,
