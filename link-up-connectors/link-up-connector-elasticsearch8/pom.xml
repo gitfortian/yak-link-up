@@ -70,4 +70,34 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                Resolve ES8 independently from ES7 and stage the runtime graph for its own plugin
+                directory. ConnectorClassLoader is child-first for vendor libraries, so the ES8
+                Jackson/client stack remains private while Link-Up API/logging contracts come from
+                the parent Worker classloader.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>${maven-dependency-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>stage-elasticsearch8-plugin-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputDirectory>${project.build.directory}/plugin-dependencies</outputDirectory>
+                            <excludeArtifactIds>link-up-api,slf4j-api</excludeArtifactIds>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>
