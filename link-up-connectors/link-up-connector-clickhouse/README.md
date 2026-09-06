@@ -1,8 +1,12 @@
 # Link-Up ClickHouse Connector
 
-`link-up-connector-clickhouse` provides a standalone bounded/offline ClickHouse Source.
+`link-up-connector-clickhouse` provides standalone bounded/offline ClickHouse Source and Sink implementations.
 
-The connector follows the mature read model used by Apache SeaTunnel while keeping the first Link-Up stage deliberately small:
+The connector keeps ClickHouse-specific planning and write semantics inside the module while reusing the official ClickHouse Java/JDBC client over HTTP.
+
+## Source — Stage 1
+
+The bounded Source follows the mature SeaTunnel read model:
 
 ```text
 ClickHouseSource
@@ -13,10 +17,6 @@ ClickHouseSource
   -> ResultSet
   -> FluxRow
 ```
-
-The transport is not reimplemented by Link-Up. Connections and query decoding use ClickHouse's official Java/JDBC client over HTTP. The ClickHouse-specific part of this connector is the bounded planning model: table mode understands MergeTree active parts and turns them into Link-Up `SourceSplit`s instead of treating ClickHouse as a generic unsplittable JDBC table.
-
-## Stage 1 boundary
 
 Supported:
 
@@ -36,29 +36,11 @@ Supported:
 - explicit `server_time_zone`
 - conservative scalar type mapping with exact unsigned/high-width ranges
 
-Explicitly out of scope:
+For a local MergeTree table with multiple `host` entries, configure one reachable node per shard. Do not list multiple replicas containing the same local data as independent hosts, otherwise the same physical parts can be read more than once.
 
-- CDC / streaming / continuous polling
-- mutation-log or Keeper-based change capture
-- exactly-once streaming checkpoint semantics
-- automatic SQL rewrite for JOIN/GROUP BY/subquery parallelization
-- automatic Distributed-table-to-local-table SQL rewriting
-- ARRAY / MAP / TUPLE / NESTED native conversion
-- AggregateFunction state decoding
-- runtime schema evolution
-- ClickHouse Sink
+For a ClickHouse `Distributed` table, Stage 1 creates one bounded distributed query and lets ClickHouse execute the cluster fan-out. Custom SQL is also one bounded Link-Up split in this stage; JOIN/GROUP BY/subquery shard rewriting is intentionally not attempted.
 
-## Why part-level splits
-
-For a MergeTree-family table, ClickHouse stores current data in active data parts. `system.parts` exposes those parts and the `active` flag. SeaTunnel's ClickHouse Source uses the same model for table-mode parallel reads: parts are discovered per shard, grouped into source splits, and each split reads only its assigned `_part` values.
-
-Link-Up keeps that model because it maps directly to `SourceSplitEnumerator` / `SourceReader` and avoids OFFSET-based partitioning.
-
-For a local MergeTree table with multiple `host` entries, **configure one reachable node per shard**. Do not list multiple replicas containing the same local data as independent hosts, otherwise each replica would legitimately expose the same active parts and the job could read duplicate rows.
-
-For a ClickHouse `Distributed` table this stage intentionally does not enumerate every replica. It creates one bounded table-query split and lets ClickHouse execute the distributed query itself.
-
-## Single-table example
+### Source example
 
 ```hocon
 source {
@@ -81,59 +63,7 @@ source {
 }
 ```
 
-`split.size` means the maximum number of active ClickHouse parts grouped into one Link-Up split. Its default is `Integer.MAX_VALUE`, matching SeaTunnel's bounded ClickHouse Source default. `batch_size` defaults to `1024`.
-
-## Multi-table example
-
-```hocon
-source {
-  ClickHouse {
-    host = "ch-1:8123"
-    username = "default"
-    password = ""
-
-    table_list = [
-      {
-        table_path = "analytics.orders"
-        filter_query = "id >= 100"
-        split_size = 1
-        batch_size = 2048
-      },
-      {
-        table_path = "crm.customers"
-        partition_list = ["202609"]
-      }
-    ]
-  }
-}
-```
-
-Inside `table_list`, use `split_size`; the flattened single-table form also accepts the SeaTunnel-style `split.size`. Link-Up compatibility aliases such as `scan_filter`, `request_part_size`, and `scan_batch_rows` are accepted.
-
-## SQL mode
-
-```hocon
-source {
-  ClickHouse {
-    host = "ch-1:8123"
-    username = "default"
-    password = ""
-
-    table_path = "analytics.orders"
-    sql = "SELECT id, amount FROM analytics.orders WHERE created_at >= today() - 1"
-    filter_query = "amount > 0"
-    batch_size = 1024
-  }
-}
-```
-
-When `sql` is present, Link-Up treats it as a bounded query and wraps it as a subquery before applying an optional additional `filter_query`. `table_path` is optional in SQL mode; when omitted, the connector creates a synthetic dataset identity for the query result.
-
-Unlike SeaTunnel's later-stage SQL splitter, Stage 1 does **not** rewrite simple SQL onto individual cluster shards and does not try to classify JOIN/GROUP BY/subquery semantics. A custom SQL query is one Link-Up split. This is a deliberate correctness boundary, not a missing streaming feature.
-
-`partition_list` is table-mode-only. In SQL mode, write the partition predicate explicitly in SQL.
-
-## Type boundary
+### Source type boundary
 
 The bounded Source maps scalar ClickHouse types conservatively:
 
@@ -149,19 +79,112 @@ The bounded Source maps scalar ClickHouse types conservatively:
 - `Decimal*` -> `DECIMAL`
 - `Date` / `Date32` -> `DATE`
 - `DateTime` / `DateTime64` -> `TIMESTAMP`
-- `String`, `FixedString`, UUID/IP/Enum/JSON/Dynamic/Variant/geometric scalar-like values -> `STRING`
+- string/UUID/IP/Enum/JSON/Dynamic/Variant/geometric scalar-like values -> `STRING`
 - `Interval*` -> `BIGINT`
 
-`Nullable`, `LowCardinality`, and scalar `SimpleAggregateFunction` wrappers are unwrapped while preserving nullability/source type metadata.
+`Nullable`, `LowCardinality`, and scalar `SimpleAggregateFunction` wrappers are unwrapped while preserving nullability/source type metadata. `ARRAY`, `MAP`, `TUPLE`, `NESTED`, and `AggregateFunction` remain fail-fast until dedicated Flux conversion semantics exist.
 
-`UInt64` is not narrowed into Java signed `long`, and 128/256-bit integers are not narrowed into an insufficient decimal precision. This follows the same data-correctness rule used by the Link-Up StarRocks/Doris native sources.
+## Sink — Stage 2
 
-`ARRAY`, `MAP`, `TUPLE`, `NESTED`, and `AggregateFunction` fail during schema preparation in Stage 1 rather than being silently converted through `String.valueOf(...)`.
+The Sink is intentionally a bounded client-side batch writer:
+
+```text
+FluxRow
+  -> prepared target metadata
+  -> PreparedStatement.addBatch()
+  -> row threshold
+  -> executeBatch()
+  -> ClickHouse synchronous INSERT acknowledgement
+```
+
+The implementation follows ClickHouse's own recommendation to avoid small one-row inserts. Link-Up batches rows on the client and uses the official JDBC prepared batch path rather than inventing a custom transport.
+
+### Stage 2 semantics
+
+- exactly one target table per Sink task
+- exactly one configured write endpoint
+- target table must already exist
+- target metadata is discovered from `system.columns` before writers start
+- source/target field names must match; target physical order may differ
+- nullable source fields cannot target non-nullable columns
+- integer widening is allowed only when it is range-safe
+- Decimal target precision/scale must fully contain the source Decimal
+- default `sink.batch_size` is `10000`
+- flush happens at the configured row threshold and at `prepareCommit()`
+- each successful `executeBatch()` is already a remote ClickHouse write
+- `commit()` is therefore a Link-Up task lifecycle boundary, not a second database transaction
+- `abort()` only clears the not-yet-sent JDBC batch
+- `close()` does **not** flush implicitly
+- ambiguous `executeBatch()` failures are not retried automatically because replay can duplicate rows
+
+ClickHouse 26.3+ can enable asynchronous inserts by default. This bounded Sink deliberately pins its write connection to `async_insert=0` and `wait_for_async_insert=1`, so a successful `executeBatch()` remains a stable remote durability boundary independent of cluster/user defaults. A conflicting `clickhouse.config` is rejected during configuration parsing.
+
+### Sink example
+
+```hocon
+sink {
+  ClickHouse {
+    host = "ch-write:8123"
+    username = "default"
+    password = ""
+    database = "analytics"
+    table = "orders"
+
+    sink.batch_size = 10000
+    server_time_zone = "UTC"
+
+    clickhouse.config = {
+      socket_timeout = "300000"
+    }
+  }
+}
+```
+
+Use one load-balancer endpoint, one `Distributed` table endpoint, or one explicit ClickHouse node. Stage 2 does not round-robin writes across a comma-separated host list because a network failure after an ambiguous write acknowledgement cannot be safely replayed against another node without stronger target-side idempotency semantics.
+
+### Sink type boundary
+
+The bounded Sink accepts Flux scalar values with explicit JDBC binding for:
+
+- `BOOLEAN`
+- `TINYINT`
+- `SMALLINT`
+- `INT`
+- `BIGINT`
+- `FLOAT`
+- `DOUBLE`
+- `DECIMAL`
+- `STRING`
+- `DATE`
+- `TIMESTAMP`
+
+`TIMESTAMP` is bound as `LocalDateTime` instead of being forced through `java.sql.Timestamp`, avoiding an extra timezone reinterpretation for ClickHouse `DateTime64` paths.
+
+The current Stage 2 Sink fails before or during binding for `BYTES`, standalone `TIME`, `TIMESTAMP_TZ`, `ARRAY`, `MAP`, and `ROW`. Those need explicit ClickHouse target semantics instead of implicit stringification or timezone conversion.
+
+## Explicit non-goals
+
+The ClickHouse connector remains an offline/bounded connector. These capabilities are outside the current stages:
+
+- CDC / streaming / continuous polling
+- mutation-log or Keeper-based change capture
+- exactly-once streaming checkpoint semantics
+- job-level transaction/XA semantics
+- INSERT replay retries after ambiguous network failures
+- ReplacingMergeTree interpreted as a generic UPSERT API
+- DELETE / UPDATE / mutation semantics
+- runtime schema evolution
+- automatic target table creation in the Sink
+- automatic Distributed-table-to-local-table SQL rewriting
+- automatic JOIN/GROUP BY/subquery shard parallelization
+- complex ARRAY/MAP/TUPLE/NESTED conversion
 
 ## Operational notes
 
-- Table mode requires a MergeTree-family or `Distributed` table. For other engines, configure an explicit bounded `sql` query.
-- Empty MergeTree tables simply enumerate zero splits and finish successfully.
-- Part names and filters are pushed to ClickHouse; Link-Up does not read entire parts and discard rows locally.
-- Reader connections are split-scoped and are closed on split completion/failure.
-- `batch_size` controls the Link-Up read batch/fetch hint; it does not change ClickHouse table semantics.
+- Source table mode requires a MergeTree-family or `Distributed` table. For other engines, configure an explicit bounded `sql` query.
+- Empty MergeTree source tables simply enumerate zero splits and finish successfully.
+- Source part names and filters are pushed to ClickHouse; Link-Up does not discard rows locally after a full-table read.
+- Source Reader connections are split-scoped and closed on split completion/failure.
+- Sink target validation is preparation-time only; runtime schema changes are rejected.
+- A successful Sink flush cannot be rolled back by a later Link-Up task abort.
+- If a whole Sink task is retried after some successful batches, verify target data first or rely on explicit target-side deduplication/key semantics. The connector does not claim job-level exactly once.
