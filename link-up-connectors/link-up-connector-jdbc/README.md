@@ -28,6 +28,37 @@ uses the source schema; for MySQL's `database.table` paths it uses the database 
 as `public.sink_table`, writes all input to that target. If `table`/`table_path` is configured, Flux generates the
 INSERT/UPSERT SQL for the resolved target and ignores `custom_sql`/`query`.
 
+## TiDB
+
+TiDB reuses MySQL Connector/J and the MySQL-compatible JDBC execution path, but it is exposed as a separate database
+dialect. Because both MySQL and TiDB use the `jdbc:mysql://` URL scheme, TiDB must be selected explicitly instead of
+being guessed from the URL:
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:mysql://tidb:4000/app"
+  driver = "com.mysql.cj.jdbc.Driver"
+  dialect = "tidb"
+  table_path = "app.orders"
+}
+
+sink {
+  type = "jdbc"
+  url = "jdbc:mysql://tidb:4000/archive"
+  driver = "com.mysql.cj.jdbc.Driver"
+  dialect = "tidb"
+}
+```
+
+The Stage 1 TiDB adapter supports bounded single-table and multi-table reads, shared JDBC range/hash split planning,
+INSERT/UPSERT and offline sink DDL. Target database resolution prefers the database bound in the TiDB JDBC URL so a
+source database name is not accidentally reused by a cross-database sink.
+
+Stage 1 intentionally does not advertise `DATABASE_SNAPSHOT`, TiCDC, TiKV/TiFlash native access, CDC, streaming
+checkpoints or runtime schema evolution. Those capabilities require separate stages instead of changing the bounded JDBC
+contract.
+
 ## Options
 
 | Option | Required | Default | Description |

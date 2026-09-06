@@ -8,6 +8,7 @@ package com.link.up.connector.jdbc.core.dialect;
 public final class DatabaseIdentifier {
 
     public static final String MYSQL = "mysql";
+    public static final String TIDB = "tidb";
     public static final String POSTGRESQL = "postgresql";
     public static final String ORACLE = "oracle";
     public static final String SQLSERVER = "sqlserver";
