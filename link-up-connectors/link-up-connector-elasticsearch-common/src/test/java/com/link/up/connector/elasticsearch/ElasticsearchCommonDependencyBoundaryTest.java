@@ -52,13 +52,25 @@ public class ElasticsearchCommonDependencyBoundaryTest {
     }
 
     private static String readRepositoryFile(String relativePath) throws IOException {
-        Path moduleDirectory = Paths.get("").toAbsolutePath();
-        Path repositoryRoot = moduleDirectory.getParent().getParent();
-        Path file = repositoryRoot.resolve(relativePath);
+        Path file = findRepositoryRoot().resolve(relativePath);
         if (!Files.isRegularFile(file)) {
             fail("Expected repository file does not exist: " + file);
         }
         return new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+    }
+
+    private static Path findRepositoryRoot() {
+        Path current = Paths.get("").toAbsolutePath();
+        while (current != null) {
+            if (Files.isRegularFile(current.resolve("pom.xml"))
+                    && Files.isDirectory(current.resolve("link-up-connectors"))
+                    && Files.isDirectory(current.resolve("link-up-launcher"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        fail("Could not locate Link-Up repository root from current working directory");
+        return Paths.get("");
     }
 
     private static void assertClassNotPresent(String className) {
