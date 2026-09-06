@@ -12,6 +12,7 @@ import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class Elasticsearch7DocumentConverterTest {
 
@@ -51,6 +52,25 @@ public class Elasticsearch7DocumentConverterTest {
                 .getSource().get("payload");
         assertTrue(payload instanceof Map);
         assertEquals(1, ((Number) ((Map<?, ?>) payload).get("x")).intValue());
+    }
+
+    @Test
+    public void rejectsOverlappingDocumentFieldPaths() {
+        CatalogTable source =
+                table(
+                        Column.builder("customer", BasicType.STRING_TYPE).sourceType("text").build(),
+                        Column.builder("customer.name", BasicType.STRING_TYPE).sourceType("text").build());
+        CatalogTable target =
+                table(
+                        Column.builder("customer", BasicType.STRING_TYPE).sourceType("object").build(),
+                        Column.builder("customer.name", BasicType.STRING_TYPE).sourceType("keyword").build());
+
+        try {
+            new Elasticsearch7DocumentConverter(source, target, null);
+            fail("Expected overlapping field path validation failure");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("Overlapping Elasticsearch document field paths"));
+        }
     }
 
     private static CatalogTable table(Column... columns) {
