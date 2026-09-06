@@ -58,4 +58,34 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                Keep the ES7 dependency graph local to this module. The distribution copies these
+                jars into plugins/elasticsearch7 instead of resolving ES7 and ES8 through one
+                flattened Maven dependency graph where version mediation would collapse the shared
+                elasticsearch-rest-client artifact to one version.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>${maven-dependency-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>stage-elasticsearch7-plugin-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputDirectory>${project.build.directory}/plugin-dependencies</outputDirectory>
+                            <excludeArtifactIds>link-up-api,slf4j-api</excludeArtifactIds>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

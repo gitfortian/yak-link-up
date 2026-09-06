@@ -31,5 +31,40 @@
                 <exclude>bin/*.sh</exclude>
             </excludes>
         </fileSet>
+
+        <!-- Elasticsearch 7 and 8 must stay in separate directories: one directory == one ConnectorClassLoader. -->
+        <fileSet>
+            <directory>../link-up-connectors/link-up-connector-elasticsearch7/target</directory>
+            <outputDirectory>plugins/elasticsearch7</outputDirectory>
+            <fileMode>0644</fileMode>
+            <includes>
+                <include>link-up-connector-elasticsearch7-${project.version}.jar</include>
+            </includes>
+        </fileSet>
+        <fileSet>
+            <directory>../link-up-connectors/link-up-connector-elasticsearch7/target/plugin-dependencies</directory>
+            <outputDirectory>plugins/elasticsearch7</outputDirectory>
+            <fileMode>0644</fileMode>
+            <includes>
+                <include>*.jar</include>
+            </includes>
+        </fileSet>
+
+        <fileSet>
+            <directory>../link-up-connectors/link-up-connector-elasticsearch8/target</directory>
+            <outputDirectory>plugins/elasticsearch8</outputDirectory>
+            <fileMode>0644</fileMode>
+            <includes>
+                <include>link-up-connector-elasticsearch8-${project.version}.jar</include>
+            </includes>
+        </fileSet>
+        <fileSet>
+            <directory>../link-up-connectors/link-up-connector-elasticsearch8/target/plugin-dependencies</directory>
+            <outputDirectory>plugins/elasticsearch8</outputDirectory>
+            <fileMode>0644</fileMode>
+            <includes>
+                <include>*.jar</include>
+            </includes>
+        </fileSet>
     </fileSets>
 </assembly>

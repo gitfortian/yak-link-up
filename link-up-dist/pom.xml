@@ -26,6 +26,25 @@
             <artifactId>link-up-server</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!--
+            Reactor ordering only. These must never become runtime dependencies of link-up-dist,
+            otherwise Maven would resolve ES7 and ES8 through one flattened dependency graph and
+            mediate the incompatible elasticsearch-rest-client versions before classloader isolation.
+        -->
+        <dependency>
+            <groupId>com.link.up</groupId>
+            <artifactId>link-up-connector-elasticsearch7</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.link.up</groupId>
+            <artifactId>link-up-connector-elasticsearch8</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>
