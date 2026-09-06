@@ -17,6 +17,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
@@ -49,14 +50,14 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
         Objects.requireNonNull(config, "config must not be null");
         ensureDriver();
         String sql =
-                "SELECT name, type, is_in_primary_key "
+                "SELECT name, type, is_in_primary_key, default_kind "
                         + "FROM system.columns "
                         + "WHERE database = ? AND table = ? "
                         + "ORDER BY position";
 
         TableSchema.Builder builder = TableSchema.builder();
         List<String> primaryKeys = new ArrayList<String>();
-        int columns = 0;
+        int writableColumns = 0;
         try (Connection connection = openConnection(config);
              PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, config.getDatabase());
@@ -65,17 +66,22 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
                 while (resultSet.next()) {
                     String name = resultSet.getString(1);
                     String sourceType = resultSet.getString(2);
+                    int primaryKey = resultSet.getInt(3);
+                    String defaultKind = resultSet.getString(4);
+                    if (!isWritableColumn(defaultKind)) {
+                        continue;
+                    }
                     builder.column(ClickHouseTypeMapper.toColumn(name, sourceType));
-                    if (resultSet.getInt(3) != 0) {
+                    if (primaryKey != 0) {
                         primaryKeys.add(name);
                     }
-                    columns++;
+                    writableColumns++;
                 }
             }
         }
-        if (columns == 0) {
+        if (writableColumns == 0) {
             throw new IllegalArgumentException(
-                    "ClickHouse sink target table does not exist or has no columns: "
+                    "ClickHouse sink target table does not exist or has no writable columns: "
                             + config.getDatabase()
                             + "."
                             + config.getTable());
@@ -132,22 +138,27 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
         pendingRows = 0;
     }
 
-    public int getPendingRows() {
-        return pendingRows;
-    }
-
     static String buildInsertSql(CatalogTable targetTable) {
         TableSchema schema = targetTable.getTableSchema();
-        StringBuilder columns = new StringBuilder();
-        StringBuilder values = new StringBuilder();
+        StringBuilder targetColumns = new StringBuilder();
+        StringBuilder selectColumns = new StringBuilder();
+        StringBuilder inputSchema = new StringBuilder();
         for (int index = 0; index < schema.getColumnCount(); index++) {
             if (index > 0) {
-                columns.append(", ");
-                values.append(", ");
+                targetColumns.append(", ");
+                selectColumns.append(", ");
+                inputSchema.append(", ");
             }
             Column column = schema.getColumn(index);
-            columns.append(quoteIdentifier(column.getName()));
-            values.append('?');
+            String inputName = "c" + index;
+            String sourceType = column.getSourceType();
+            if (sourceType == null || sourceType.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "ClickHouse prepared target column is missing sourceType: " + column.getName());
+            }
+            targetColumns.append(quoteIdentifier(column.getName()));
+            selectColumns.append(inputName);
+            inputSchema.append(inputName).append(' ').append(sourceType.trim());
         }
         TablePath path = targetTable.getTablePath();
         return "INSERT INTO "
@@ -155,10 +166,12 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
                 + "."
                 + quoteIdentifier(path.getTableName())
                 + " ("
-                + columns
-                + ") VALUES ("
-                + values
-                + ")";
+                + targetColumns
+                + ") SELECT "
+                + selectColumns
+                + " FROM input('"
+                + escapeStringLiteral(inputSchema.toString())
+                + "')";
     }
 
     static Connection openConnection(ClickHouseSinkConfig config) throws Exception {
@@ -186,11 +199,25 @@ public final class ClickHouseSinkJdbcClient implements AutoCloseable {
         return base + "?async_insert=0&wait_for_async_insert=1";
     }
 
+    static boolean isWritableColumn(String defaultKind) {
+        if (defaultKind == null || defaultKind.trim().isEmpty()) {
+            return true;
+        }
+        String kind = defaultKind.trim().toUpperCase(Locale.ROOT);
+        return !"MATERIALIZED".equals(kind)
+                && !"ALIAS".equals(kind)
+                && !"EPHEMERAL".equals(kind);
+    }
+
     private static String quoteIdentifier(String value) {
         if (value == null || value.trim().isEmpty()) {
             throw new IllegalArgumentException("ClickHouse identifier must not be empty");
         }
         return "`" + value.replace("`", "``") + "`";
+    }
+
+    private static String escapeStringLiteral(String value) {
+        return value.replace("\\", "\\\\").replace("'", "\\'");
     }
 
     private static void ensureDriver() {

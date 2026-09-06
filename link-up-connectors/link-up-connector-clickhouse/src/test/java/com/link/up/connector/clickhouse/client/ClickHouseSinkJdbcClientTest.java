@@ -13,22 +13,42 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class ClickHouseSinkJdbcClientTest {
 
     @Test
-    public void buildsNamedPreparedInsertInPreparedMetadataOrder() {
+    public void buildsInputFunctionPreparedInsertInPreparedMetadataOrder() {
         CatalogTable target =
                 CatalogTable.builder(
                                 TablePath.of("analytics", "orders"),
                                 TableSchema.builder()
-                                        .column(Column.builder("id", BasicType.LONG_TYPE).build())
-                                        .column(Column.builder("order`name", BasicType.STRING_TYPE).build())
+                                        .column(Column.builder("id", BasicType.LONG_TYPE).sourceType("Int64").build())
+                                        .column(Column.builder("order`name", BasicType.STRING_TYPE).sourceType("Nullable(String)").build())
                                         .build())
                         .build();
 
         assertEquals(
-                "INSERT INTO `analytics`.`orders` (`id`, `order``name`) VALUES (?, ?)",
+                "INSERT INTO `analytics`.`orders` (`id`, `order``name`) SELECT c0, c1 FROM input('c0 Int64, c1 Nullable(String)')",
+                ClickHouseSinkJdbcClient.buildInsertSql(target));
+    }
+
+    @Test
+    public void escapesQuotesInsideInputTypeDeclaration() {
+        CatalogTable target =
+                CatalogTable.builder(
+                                TablePath.of("analytics", "orders"),
+                                TableSchema.builder()
+                                        .column(
+                                                Column.builder("kind", BasicType.STRING_TYPE)
+                                                        .sourceType("Enum8('a' = 1, 'b' = 2)")
+                                                        .build())
+                                        .build())
+                        .build();
+
+        assertEquals(
+                "INSERT INTO `analytics`.`orders` (`kind`) SELECT c0 FROM input('c0 Enum8(\\'a\\' = 1, \\'b\\' = 2)')",
                 ClickHouseSinkJdbcClient.buildInsertSql(target));
     }
 
@@ -38,6 +58,15 @@ public class ClickHouseSinkJdbcClientTest {
         assertEquals(
                 "jdbc:clickhouse:http://ch-1:8123/analytics?async_insert=0&wait_for_async_insert=1",
                 ClickHouseSinkJdbcClient.buildSafeJdbcUrl(config));
+    }
+
+    @Test
+    public void materializedAliasAndEphemeralColumnsAreNotWritable() {
+        assertTrue(ClickHouseSinkJdbcClient.isWritableColumn(""));
+        assertTrue(ClickHouseSinkJdbcClient.isWritableColumn("DEFAULT"));
+        assertFalse(ClickHouseSinkJdbcClient.isWritableColumn("MATERIALIZED"));
+        assertFalse(ClickHouseSinkJdbcClient.isWritableColumn("alias"));
+        assertFalse(ClickHouseSinkJdbcClient.isWritableColumn("EPHEMERAL"));
     }
 
     private static ClickHouseSinkConfig config() {
