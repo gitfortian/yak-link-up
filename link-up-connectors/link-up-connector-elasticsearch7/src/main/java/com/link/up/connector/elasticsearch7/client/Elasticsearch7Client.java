@@ -7,17 +7,11 @@ import com.link.up.connector.elasticsearch7.Elasticsearch7ConnectorIdentity;
 import com.link.up.connector.elasticsearch7.config.Elasticsearch7SourceConfig;
 import com.link.up.connector.elasticsearch7.schema.Elasticsearch7TypeMapper;
 import com.link.up.connector.elasticsearch7.source.Elasticsearch7SourceSplit;
-import org.apache.http.HttpHost;
-import org.apache.http.auth.AuthScope;
-import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.elasticsearch.action.search.ClearScrollRequest;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchScrollRequest;
 import org.elasticsearch.client.RequestOptions;
-import org.elasticsearch.client.RestClient;
-import org.elasticsearch.client.RestClientBuilder;
 import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.client.core.MainResponse;
 import org.elasticsearch.client.indices.GetMappingsRequest;
@@ -31,8 +25,6 @@ import org.elasticsearch.search.slice.SliceBuilder;
 import org.elasticsearch.search.sort.SortBuilders;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -47,7 +39,13 @@ public final class Elasticsearch7Client implements AutoCloseable {
 
     public Elasticsearch7Client(Elasticsearch7SourceConfig config) {
         this.config = Objects.requireNonNull(config, "config must not be null");
-        this.client = buildClient(config);
+        this.client =
+                Elasticsearch7RestClientFactory.create(
+                        config.getHosts(),
+                        config.getUsername(),
+                        config.getPassword(),
+                        config.getConnectTimeoutMs(),
+                        config.getSocketTimeoutMs());
     }
 
     public void verifyMajorVersion() throws IOException {
@@ -151,45 +149,6 @@ public final class Elasticsearch7Client implements AutoCloseable {
             documents.add(source);
         }
         return new ScrollPage(response.getScrollId(), documents);
-    }
-
-    private static RestHighLevelClient buildClient(Elasticsearch7SourceConfig config) {
-        HttpHost[] hosts = new HttpHost[config.getHosts().size()];
-        for (int index = 0; index < config.getHosts().size(); index++) {
-            hosts[index] = toHttpHost(config.getHosts().get(index));
-        }
-
-        RestClientBuilder builder = RestClient.builder(hosts);
-        builder.setRequestConfigCallback(
-                request -> request
-                        .setConnectTimeout(config.getConnectTimeoutMs())
-                        .setSocketTimeout(config.getSocketTimeoutMs()));
-
-        if (!config.getUsername().isEmpty()) {
-            BasicCredentialsProvider credentials = new BasicCredentialsProvider();
-            credentials.setCredentials(
-                    AuthScope.ANY,
-                    new UsernamePasswordCredentials(
-                            config.getUsername(),
-                            config.getPassword()));
-            builder.setHttpClientConfigCallback(
-                    http -> http.setDefaultCredentialsProvider(credentials));
-        }
-        return new RestHighLevelClient(builder);
-    }
-
-    private static HttpHost toHttpHost(String value) {
-        final URI uri;
-        try {
-            uri = new URI(value);
-        } catch (URISyntaxException failure) {
-            throw new IllegalArgumentException("Invalid Elasticsearch host: " + value, failure);
-        }
-        int port = uri.getPort();
-        if (port < 0) {
-            port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 9200;
-        }
-        return new HttpHost(uri.getHost(), port, uri.getScheme());
     }
 
     private static String requireText(String value, String name) {
