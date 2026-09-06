@@ -21,7 +21,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** Ordered bounded MongoDB insert writer with task-local durability. */
+/** Ordered bounded MongoDB insert writer with task-local acknowledged writes. */
 public final class MongoSinkWriter implements SinkWriter<FluxRow> {
 
     private final MongoSinkConfig config;
@@ -122,7 +122,7 @@ public final class MongoSinkWriter implements SinkWriter<FluxRow> {
 
     @Override
     public String getRetryAdvice() {
-        return "MongoDB insertMany makes each successful flush durable before task commit. "
+        return "MongoDB insertMany makes each successful flush an acknowledged remote write before task commit. "
                 + "A failed insert request may have inserted a prefix of the ordered batch; "
                 + "verify target documents before retrying the whole task.";
     }
