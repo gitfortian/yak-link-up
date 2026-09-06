@@ -38,8 +38,9 @@ es8     -X-> es7
 
 - ES7 client: `org.elasticsearch.client:elasticsearch-rest-high-level-client:7.17.29`
 - ES8 client: `co.elastic.clients:elasticsearch-java:8.19.21`
+- ES8 Jackson 2 mapper runtime: `com.fasterxml.jackson.core:jackson-databind:2.18.8`
 
-Link-Up 当前仍以 Java 8 为基线。ES8 module 继续排除 Jackson 3 runtime artifacts，具体 ES8 JSON mapper 留到 ES8 implementation stage 决定。
+Link-Up 当前仍以 Java 8 为基线。ES8 Java API Client 8.19.21 本身使用 Java `--release 8`；Stage 3 显式采用 `JacksonJsonpMapper` 的 Jackson 2 路径，并继续排除 Java 17-only 的 Jackson 3 runtime artifacts。ES8 的 Jackson 2 pin 仅存在于 ES8 dependency island，不修改其他模块现有 Jackson 版本。
 
 ## Stage 0 — module and runtime boundary
 
@@ -117,14 +118,66 @@ Stage 2 使用 Elasticsearch `IndexRequest` 写文档，但不向 Link-Up 暴露
 - CDC、实时同步、RowKind 语义
 - Job-level transaction / exactly-once 声明
 
-## ES7 compatibility boundary
+## Stage 3 — Elasticsearch 8 bounded Source
+
+Stage 3 已实现独立的 `elasticsearch8` bounded Source，产品语义与 ES7 Source 保持一致，但 vendor API 完全使用 Elasticsearch Java API Client 8.19.21：
+
+- `TableSourceFactory` SPI identifier `elasticsearch8`
+- 单 index / 单 index alias mapping discovery
+- `RestClientTransport + ElasticsearchClient`
+- `JacksonJsonpMapper`（Jackson 2.18.8）
+- bounded Scroll + sliced-scroll splits
+- `_source` projection、Query DSL JSON、Basic Auth
+- ES major version=8 校验
+- split 完成 / Reader 关闭时显式 clear scroll
+- mapping -> `TableSchema` -> `FluxRow`
+
+示例：
+
+```hocon
+source {
+  Elasticsearch8 {
+    hosts = ["http://127.0.0.1:9200"]
+    index = "orders"
+
+    username = "elastic"
+    password = "secret"
+
+    source = ["order_id", "amount", "customer.name"]
+    query = """{"range":{"created_at":{"gte":"2026-01-01"}}}"""
+
+    scroll_time = "1m"
+    scroll_size = 1000
+    slices = 4
+  }
+}
+```
+
+### Stage 3 semantic boundary
+
+Stage 3 延续 ES7 Source 的保守类型策略：确定的 boolean/integer/floating scalar mapping 使用强类型，`unsigned_long` 使用 `DECIMAL(20,0)`；date/object/nested/geo/vector/range 等复杂类型保留为 STRING/JSON。mapping 无法声明 scalar-vs-array cardinality，因此强类型字段实际出现数组时直接失败，不静默猜测 Array。
+
+本阶段继续使用 bounded sliced Scroll。虽然 ES8 对 deep pagination 更推荐 PIT + `search_after`，但 PIT 会引入跨 split 的共享 PIT 生命周期、一致性和恢复设计，因此不在 Stage 3 顺带扩入。
+
+明确不包含：
+
+- Elasticsearch 8 Sink
+- PIT / `search_after`
+- Elasticsearch SQL
+- wildcard / comma-separated multi-index read
+- alias resolving to multiple concrete indices
+- runtime schema evolution
+- CDC、实时同步、RowKind 语义
+
+## Compatibility boundary
 
 `elasticsearch7` client 固定为 `7.17.29`，当前首要兼容目标为 Elasticsearch 7.17.x。更早 ES7 minor 需要单独验证后再扩大支持声明。
 
-## Next stages
+`elasticsearch8` client 固定为 `8.19.21`，Stage 3 当前首要兼容目标为 Elasticsearch 8.19.x；更广的 ES8 minor 范围在单独验证后再扩大声明。
+
+## Next stage
 
 ```text
-Stage 3  Elasticsearch 8 bounded Source
 Stage 4  Elasticsearch 8 bounded Sink
 ```
 
