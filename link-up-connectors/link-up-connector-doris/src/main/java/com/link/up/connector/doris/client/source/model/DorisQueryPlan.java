@@ -1,5 +1,6 @@
 package com.link.up.connector.doris.client.source.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.io.Serializable;
@@ -7,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Query plan returned by the Doris FE native scan endpoint. */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public final class DorisQueryPlan implements Serializable {
 
     private static final long serialVersionUID = 1L;
