@@ -1,6 +1,8 @@
 package com.link.up.connector.clickhouse;
 
+import com.link.up.connector.clickhouse.converter.ClickHousePreparedStatementBinder;
 import com.link.up.connector.clickhouse.converter.ClickHouseResultSetRowConverter;
+import com.link.up.connector.clickhouse.sink.ClickHouseSinkFactory;
 import com.link.up.connector.clickhouse.source.ClickHouseSourceFactory;
 import org.junit.Test;
 
@@ -12,8 +14,9 @@ import static org.junit.Assert.assertFalse;
 public class ClickHouseConnectorPackageBoundaryTest {
 
     @Test
-    public void sourceFactoryUsesStableIdentifier() {
+    public void factoriesUseStableIdentifier() {
         assertEquals("clickhouse", new ClickHouseSourceFactory().factoryIdentifier());
+        assertEquals("clickhouse", new ClickHouseSinkFactory().factoryIdentifier());
     }
 
     @Test
@@ -21,6 +24,9 @@ public class ClickHouseConnectorPackageBoundaryTest {
         assertEquals(
                 "com.link.up.connector.clickhouse.converter",
                 ClickHouseResultSetRowConverter.class.getPackage().getName());
+        assertEquals(
+                "com.link.up.connector.clickhouse.converter",
+                ClickHousePreparedStatementBinder.class.getPackage().getName());
     }
 
     @Test
