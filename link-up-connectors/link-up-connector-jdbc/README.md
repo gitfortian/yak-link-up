@@ -59,6 +59,31 @@ Stage 1 intentionally does not advertise `DATABASE_SNAPSHOT`, TiCDC, TiKV/TiFlas
 checkpoints or runtime schema evolution. Those capabilities require separate stages instead of changing the bounded JDBC
 contract.
 
+## SAP HANA
+
+SAP HANA is exposed as the `hana` JDBC dialect and is auto-detected from `jdbc:sap://` URLs. Stage 1 is deliberately
+source-only: it provides bounded reads, schema/table metadata discovery, custom SQL projection, common HANA type mapping
+and the shared safe JDBC split planner. It does not enable HANA sink DDL, INSERT/UPSERT, CDC, SLT or streaming semantics.
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:sap://hana:30013/?databaseName=HXE"
+  driver = "com.sap.db.jdbc.Driver"
+  schema = "SALES"
+  table_path = "SALES.ORDERS"
+}
+```
+
+HANA SQL identifiers use `schema.table`; the database/tenant is selected by the JDBC connection. Unquoted `table_path`
+parts are normalized to HANA's uppercase identifier semantics, while quoted identifiers preserve case. The connector
+`schema` option is applied as the JDBC `currentSchema` default unless the URL or explicit JDBC properties already set
+`currentSchema`.
+
+The Stage 1 type contract covers BOOLEAN, integer types, SMALLDECIMAL/DECIMAL, REAL/DOUBLE, VARCHAR/NVARCHAR and common
+text/LOB types, DATE/TIME/SECONDDATE/TIMESTAMP, and binary/BLOB types. ARRAY and spatial `ST_POINT`/`ST_GEOMETRY` are
+rejected explicitly instead of being silently coerced.
+
 ## Options
 
 | Option | Required | Default | Description |
