@@ -1,12 +1,15 @@
 package com.link.up.connector.jdbc.catalog.gbase.gbase8a;
 
-import com.link.up.api.table.catalog.Catalog;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.PrimaryKey;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
+import com.link.up.api.table.catalog.WritableCatalog;
 import com.link.up.api.table.catalog.exception.CatalogException;
+import com.link.up.api.table.catalog.exception.DatabaseAlreadyExistsException;
+import com.link.up.api.table.catalog.exception.DatabaseNotFoundException;
+import com.link.up.api.table.catalog.exception.TableAlreadyExistsException;
 import com.link.up.api.table.catalog.exception.TableNotFoundException;
 import com.link.up.connector.jdbc.catalog.JdbcCatalogConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
@@ -16,6 +19,7 @@ import com.link.up.connector.jdbc.core.dialect.gbase.gbase8a.GBase8aTypeMapper;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -28,13 +32,14 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * Read-only GBase 8a Catalog for bounded/offline Source jobs.
+ * GBase 8a Catalog for bounded/offline Source and existing-table JDBC Sink jobs.
  *
- * <p>GBase 8a exposes database/table semantics through its JDBC catalog model. Stage 1 uses the
- * standard {@link DatabaseMetaData} contract instead of borrowing MySQL DDL/catalog code, keeping
- * this adapter source-only and MPP-safe.</p>
+ * <p>Metadata uses the standard JDBC {@link DatabaseMetaData} contract. The Sink stage deliberately
+ * exposes {@link WritableCatalog} only so the shared save-mode lifecycle can validate existing
+ * targets and optionally truncate their data. Structure-changing DDL stays disabled until GBase 8a
+ * distribution/MPP table design is modeled explicitly.</p>
  */
-public final class GBase8aCatalog implements Catalog {
+public final class GBase8aCatalog implements WritableCatalog {
 
     public static final String TABLE_OPTION_DIALECT = "dialect";
 
@@ -58,7 +63,7 @@ public final class GBase8aCatalog implements Catalog {
             throw new IllegalArgumentException("非法 GBase 8a JDBC URL：" + config.getUrl());
         }
         if (!hasText(defaultDatabase)) {
-            throw new IllegalArgumentException("GBase 8a Stage 1 必须指定默认 database");
+            throw new IllegalArgumentException("GBase 8a JDBC URL 必须指定默认 database");
         }
         this.catalogName = catalogName.trim();
         this.config = config;
@@ -115,7 +120,7 @@ public final class GBase8aCatalog implements Catalog {
         }
     }
 
-    /** GBase 8a Stage 1 models database as JDBC catalog and has no separate schema layer. */
+    /** GBase 8a models database as JDBC catalog and has no separate schema layer. */
     @Override
     public List<String> listSchemas(String databaseName) {
         return Collections.emptyList();
@@ -197,6 +202,69 @@ public final class GBase8aCatalog implements Catalog {
         }
     }
 
+    @Override
+    public void createDatabase(
+            String databaseName,
+            boolean ignoreIfExists)
+            throws CatalogException, DatabaseAlreadyExistsException {
+        throw unsupportedSchemaDdl("create database");
+    }
+
+    @Override
+    public void dropDatabase(
+            String databaseName,
+            boolean ignoreIfNotExists)
+            throws CatalogException, DatabaseNotFoundException {
+        throw unsupportedSchemaDdl("drop database");
+    }
+
+    @Override
+    public void createTable(
+            CatalogTable table,
+            boolean ignoreIfExists)
+            throws CatalogException, DatabaseNotFoundException, TableAlreadyExistsException {
+        throw unsupportedSchemaDdl("create table");
+    }
+
+    @Override
+    public void addColumn(
+            TablePath tablePath,
+            Column column)
+            throws CatalogException, TableNotFoundException {
+        throw unsupportedSchemaDdl("add column");
+    }
+
+    @Override
+    public void dropTable(
+            TablePath tablePath,
+            boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        throw unsupportedSchemaDdl("drop table");
+    }
+
+    @Override
+    public void truncateTable(
+            TablePath tablePath,
+            boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        checkOpened();
+        TablePath normalized = normalizeTablePath(tablePath);
+        if (!tableExists(normalized)) {
+            if (ignoreIfNotExists) {
+                return;
+            }
+            throw new TableNotFoundException(catalogName, normalized);
+        }
+
+        String sql = "TRUNCATE TABLE " + quoteTable(normalized);
+        try (Connection connection = newConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new CatalogException("清空 GBase 8a 表失败，table=" + normalized, e);
+        }
+    }
+
     private List<Column> readColumns(
             DatabaseMetaData metadata,
             TablePath tablePath) throws SQLException {
@@ -263,6 +331,19 @@ public final class GBase8aCatalog implements Catalog {
         return defaultDatabase;
     }
 
+    private String quoteTable(TablePath tablePath) {
+        return quoteIdentifier(tablePath.getDatabaseName())
+                + "."
+                + quoteIdentifier(tablePath.getTableName());
+    }
+
+    private static String quoteIdentifier(String identifier) {
+        if (!hasText(identifier)) {
+            throw new IllegalArgumentException("identifier must not be empty");
+        }
+        return "`" + identifier.trim().replace("`", "``") + "`";
+    }
+
     private Connection newConnection() throws SQLException {
         return DriverManager.getConnection(config.getUrl(), config.toConnectionProperties());
     }
@@ -282,6 +363,13 @@ public final class GBase8aCatalog implements Catalog {
         if (!opened) {
             throw new IllegalStateException("Catalog 尚未打开，请先调用 open()");
         }
+    }
+
+    private static CatalogException unsupportedSchemaDdl(String operation) {
+        return new CatalogException(
+                "GBase 8a existing-table JDBC Sink does not support "
+                        + operation
+                        + "; pre-create the target table and keep MPP distribution DDL outside this stage");
     }
 
     private static boolean isBaseTable(String tableType) {

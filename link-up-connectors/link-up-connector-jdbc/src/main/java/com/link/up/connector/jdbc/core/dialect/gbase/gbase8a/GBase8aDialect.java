@@ -19,10 +19,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * GBase 8a bounded/offline JDBC Source dialect.
+ * GBase 8a bounded/offline JDBC dialect.
  *
- * <p>Stage 1 covers the normal JDBC read path only. MPP-native loading, Sink DDL, UPSERT, CDC and
- * streaming semantics remain separate stages.</p>
+ * <p>The adapter supports bounded reads and an existing-table INSERT/batch Sink. MPP-native loading,
+ * structure-changing Sink DDL, UPSERT/MERGE, CDC and streaming job semantics remain separate stages.</p>
  */
 public final class GBase8aDialect implements JdbcDialect {
 
@@ -41,7 +41,7 @@ public final class GBase8aDialect implements JdbcDialect {
         String database = GBase8aJdbcUrl.databaseName(connectionConfig.getUrl());
         if (!JdbcDialect.hasText(database)) {
             throw new IllegalArgumentException(
-                    "GBase 8a Stage 1 JDBC URL 必须指定 database");
+                    "GBase 8a JDBC URL 必须指定 database");
         }
 
         this.defaultDatabase = database.trim();
@@ -155,6 +155,7 @@ public final class GBase8aDialect implements JdbcDialect {
         Map<String, String> properties = new LinkedHashMap<String, String>();
         properties.put("tinyInt1isBit", "false");
         properties.put("yearIsDateType", "false");
+        properties.put("rewriteBatchedStatements", "true");
         return Collections.unmodifiableMap(properties);
     }
 

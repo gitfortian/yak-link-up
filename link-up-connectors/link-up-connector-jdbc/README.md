@@ -112,9 +112,9 @@ The planned bounded/offline implementation order is:
 CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths stay outside
 this family-level contract.
 
-### GBase 8a bounded Source
+### GBase 8a bounded Source + existing-table JDBC Sink
 
-GBase 8a is exposed as the first-class `gbase8a` JDBC dialect. Stage 1 uses the vendor JDBC protocol and driver:
+GBase 8a is exposed as the first-class `gbase8a` JDBC dialect and uses the vendor JDBC protocol/driver:
 
 ```hocon
 source {
@@ -124,26 +124,56 @@ source {
   dialect = "gbase8a"
   table_path = "app.orders"
 }
+
+sink {
+  type = "jdbc"
+  url = "jdbc:gbase://gbase8a:5258/archive"
+  driver = "com.gbase.jdbc.Driver"
+  dialect = "gbase8a"
+  table = "orders"
+  schema_save_mode = "ERROR_WHEN_SCHEMA_NOT_EXIST"
+  data_save_mode = "APPEND_DATA"
+}
 ```
 
-GBase 8a uses `database.table` semantics with no separate schema layer in this stage. The Source owns a dedicated
-read-only Catalog built on standard JDBC `DatabaseMetaData` for database, table, column and primary-key discovery instead
-of borrowing MySQL DDL behavior. Table identifiers use backtick quoting, and both single-table and multi-table bounded
-jobs continue through the shared JDBC Source runtime.
+GBase 8a uses `database.table` semantics with no separate schema layer in this bounded JDBC stage. The JDBC URL owns the
+active database. Source metadata may come from another database/schema, but an unqualified Sink target is always rebound
+to the Sink URL database so source routing metadata cannot leak into the target. An explicit target may be `orders` or
+repeat the URL database as `archive.orders`; an explicit different database fails during Sink preparation instead of
+silently redirecting one connection to another database.
+
+Metadata discovery remains based on standard JDBC `DatabaseMetaData` for databases, tables, columns and primary keys.
+The Catalog now implements `WritableCatalog` only to participate in the shared JDBC Sink save-mode lifecycle. The stage
+supports metadata validation and `TRUNCATE TABLE` for `DROP_DATA`, while structure-changing DDL remains blocked:
+
+- no CREATE/DROP DATABASE
+- no CREATE/DROP TABLE
+- no ADD COLUMN or runtime schema evolution
+- no automatic target-table creation
+
+Create the target table before running the job. `CREATE_SCHEMA_WHEN_NOT_EXIST` is safe for an existing compatible table
+but fails clearly when the table is absent. `RECREATE_SCHEMA` cannot destructively drop a table because DROP TABLE is
+blocked before recreation. `CREATE_OR_ADD_COLUMNS` may validate an already compatible target, but a missing column fails
+instead of mutating MPP table structure.
+
+The Sink reuses the shared JDBC writer: parameterized `INSERT`, configured batch size, `PreparedStatement.addBatch()` /
+`executeBatch()`, one task-local transaction and the existing commit/rollback, retry/savepoint and dirty-data behavior.
+`rewriteBatchedStatements=true` is a GBase 8a dialect default because the vendor JDBC driver can rewrite batched INSERTs
+into multi-value INSERT statements; explicit user `properties` may override it.
+
+UPSERT/MERGE is intentionally not advertised. GBase 8a MERGE has distribution-specific constraints, so this generic
+existing-table stage does not guess HASH distribution keys or business-key semantics. POC/native high-speed loading is
+also a later stage; this PR keeps JDBC batch INSERT as the usable baseline before introducing a separate MPP-native load
+path.
 
 The read-side type contract covers common numeric, string/text, binary/BLOB, DATE, TIME, DATETIME and TIMESTAMP types.
 DATETIME/TIMESTAMP map to the Link-Up `TIMESTAMP` boundary. DECIMAL values above Link-Up's precision limit fall back to
-STRING instead of silently losing precision. Unknown/extension JDBC types also fall back to STRING for metadata/read
-usability. No target database type generation is exposed in this Source-only stage.
+STRING instead of silently losing precision. Target database type generation remains disabled because this stage never
+auto-creates GBase 8a tables.
 
-GBase JDBC uses `Integer.MIN_VALUE` as the streaming-result fetch-size sentinel. A positive Link-Up `fetch_size` therefore
-selects that vendor streaming mode rather than passing the positive value through directly, keeping large bounded reads
-from relying on the driver's default full-result buffering behavior. `tinyInt1isBit=false` and `yearIsDateType=false` are
-safe dialect defaults; explicit user `properties` still override dialect defaults.
-
-Stage 1 advertises `BEST_EFFORT` read consistency only. It does not claim one MPP-wide snapshot across parallel JDBC
-readers. Sink, WritableCatalog, CREATE/ALTER/DROP DDL, UPSERT, POC/native high-speed loading, VC/topology management, CDC,
-streaming checkpoints and runtime schema evolution remain separate follow-up stages.
+For large bounded reads, a positive Link-Up `fetch_size` selects the GBase JDBC streaming-result sentinel
+`Integer.MIN_VALUE`. `tinyInt1isBit=false` and `yearIsDateType=false` remain safe type defaults. The Source advertises
+`BEST_EFFORT` read consistency only and does not claim one MPP-wide snapshot across parallel JDBC readers.
 
 The vendor GBase JDBC driver is not guessed as a Maven dependency by this module. Deployments must provide the official
 GBase 8a JDBC driver on the runtime classpath and configure `driver = "com.gbase.jdbc.Driver"`.

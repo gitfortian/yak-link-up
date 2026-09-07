@@ -6,7 +6,7 @@ import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialectFactory;
 
-/** GBase 8a bounded JDBC Source dialect factory. */
+/** GBase 8a bounded/offline JDBC dialect factory. */
 @AutoService(JdbcDialectFactory.class)
 public final class GBase8aDialectFactory implements JdbcDialectFactory {
 

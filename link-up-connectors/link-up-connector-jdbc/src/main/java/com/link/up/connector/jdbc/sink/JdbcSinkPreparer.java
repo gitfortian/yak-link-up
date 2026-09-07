@@ -110,6 +110,11 @@ final class JdbcSinkPreparer implements SinkPreparer {
         CatalogTable mapped = path == null
                 ? source
                 : source.withPath(dialect.parseTablePath(path));
+        if (path != null && GBase8aSinkSupport.accepts(config.getConnectionConfig())) {
+            GBase8aSinkSupport.validateExplicitTargetPath(
+                    config.getConnectionConfig(),
+                    mapped.getTablePath());
+        }
         TablePath targetPath = resolveTargetPath(mapped.getTablePath());
         return targetPath == null || mapped.getTablePath().equals(targetPath)
                 ? mapped
@@ -141,6 +146,10 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return GoldenDbSinkSupport.resolveTargetPath(
                     config.getConnectionConfig(), tablePath);
         }
+        if (GBase8aSinkSupport.accepts(config.getConnectionConfig())) {
+            return GBase8aSinkSupport.resolveTargetPath(
+                    config.getConnectionConfig(), tablePath);
+        }
         return JdbcCreateTableSqlResolver.resolveTargetPath(
                 config.getConnectionConfig(), tablePath);
     }
@@ -167,6 +176,9 @@ final class JdbcSinkPreparer implements SinkPreparer {
                     config.getConnectionConfig(), table);
         }
         if (GoldenDbSinkSupport.accepts(config.getConnectionConfig())) {
+            return null;
+        }
+        if (GBase8aSinkSupport.accepts(config.getConnectionConfig())) {
             return null;
         }
         return JdbcCreateTableSqlResolver.resolve(
