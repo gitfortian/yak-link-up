@@ -21,8 +21,10 @@ import java.util.Map;
 /**
  * GBase 8a bounded/offline JDBC dialect.
  *
- * <p>The adapter supports bounded reads and an existing-table INSERT/batch Sink. MPP-native loading,
- * structure-changing Sink DDL, UPSERT/MERGE, CDC and streaming job semantics remain separate stages.</p>
+ * <p>The adapter supports bounded reads plus INSERT/batch Sink writes and safe automatic creation
+ * of a missing target table. Automatic DDL deliberately copies only the relational target shape;
+ * MPP distribution/replication design, destructive recreation, runtime schema evolution,
+ * UPSERT/MERGE, native loading, CDC and streaming semantics remain separate stages.</p>
  */
 public final class GBase8aDialect implements JdbcDialect {
 

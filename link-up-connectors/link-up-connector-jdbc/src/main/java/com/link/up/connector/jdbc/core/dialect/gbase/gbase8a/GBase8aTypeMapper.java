@@ -17,15 +17,22 @@ import java.util.Locale;
 /**
  * GBase 8a bounded/offline JDBC type mapper.
  *
- * <p>The mapper follows the JDBC types documented by GBase 8a for metadata discovery and row
- * conversion. Unknown/extension types fall back to STRING. Target DDL type generation stays
- * disabled because the current Sink writes pre-created tables only.</p>
+ * <p>The read side follows the JDBC types documented by GBase 8a. The automatic-target stage also
+ * exposes a conservative Flux-to-GBase DDL mapping. It deliberately favors value safety over
+ * source-type fidelity: long/unknown strings become LONGTEXT, binary values become LONGBLOB and
+ * Link-Up TIMESTAMP becomes GBase DATETIME so the target is not constrained by GBase TIMESTAMP's
+ * narrower range/fractional-second behavior.</p>
  */
 public final class GBase8aTypeMapper implements JdbcTypeMapper {
 
-    private static final int MAX_DECIMAL_PRECISION = 38;
+    private static final int MAX_FLUX_DECIMAL_PRECISION = 38;
     private static final int DEFAULT_DECIMAL_PRECISION = 38;
     private static final int DEFAULT_DECIMAL_SCALE = 18;
+
+    /** Conservative VARCHAR ceiling that is valid for GBase 8a utf8mb4 deployments. */
+    private static final long SAFE_VARCHAR_LENGTH = 8191L;
+    private static final int GBASE_MAX_DECIMAL_PRECISION = 65;
+    private static final int GBASE_MAX_DECIMAL_SCALE = 30;
 
     @Override
     public Column map(ResultSetMetaData metadata, int columnIndex) throws SQLException {
@@ -64,10 +71,108 @@ public final class GBase8aTypeMapper implements JdbcTypeMapper {
         return builder.build();
     }
 
+    /**
+     * Maps a Link-Up column to the portable GBase 8a type used for automatic target creation.
+     *
+     * <p>Defaults, identity/auto-increment behavior and source-specific type decorations are
+     * intentionally not copied by this method.</p>
+     */
     @Override
     public String toDatabaseType(Column column) {
-        throw new UnsupportedOperationException(
-                "GBase 8a existing-table Sink does not generate target DDL types");
+        if (column == null || column.getDataType() == null) {
+            throw new IllegalArgumentException("column/dataType must not be null");
+        }
+
+        SqlType type = column.getDataType().getSqlType();
+        switch (type) {
+            case STRING:
+                return stringTargetType(column);
+            case BOOLEAN:
+                return "BOOLEAN";
+            case TINYINT:
+                return "TINYINT";
+            case SMALLINT:
+                return "SMALLINT";
+            case INT:
+                return "INT";
+            case BIGINT:
+                return "BIGINT";
+            case FLOAT:
+                return "FLOAT";
+            case DOUBLE:
+                return "DOUBLE";
+            case DECIMAL:
+                return decimalTargetType(column);
+            case BYTES:
+                return "LONGBLOB";
+            case DATE:
+                return "DATE";
+            case TIME:
+                return "TIME";
+            case TIMESTAMP:
+                return "DATETIME";
+            case TIMESTAMP_TZ:
+                throw unsupportedTargetType(
+                        column,
+                        "GBase 8a has no portable TIMESTAMP WITH TIME ZONE target contract");
+            case ARRAY:
+            case MAP:
+            case ROW:
+            case NULL:
+            default:
+                throw unsupportedTargetType(
+                        column,
+                        "automatic target creation only supports scalar relational types");
+        }
+    }
+
+    private static String stringTargetType(Column column) {
+        Long length = column.getLength();
+        if (length != null && length > 0 && length <= SAFE_VARCHAR_LENGTH) {
+            return "VARCHAR(" + length + ")";
+        }
+        return "LONGTEXT";
+    }
+
+    private static String decimalTargetType(Column column) {
+        int precision = DEFAULT_DECIMAL_PRECISION;
+        int scale = DEFAULT_DECIMAL_SCALE;
+
+        if (column.getDataType() instanceof DecimalType) {
+            DecimalType decimal = (DecimalType) column.getDataType();
+            precision = decimal.getPrecision();
+            scale = decimal.getScale();
+        } else {
+            if (column.getPrecision() != null && column.getPrecision() > 0) {
+                precision = column.getPrecision();
+            }
+            if (column.getScale() != null && column.getScale() >= 0) {
+                scale = column.getScale();
+            }
+        }
+
+        if (precision <= 0
+                || precision > GBASE_MAX_DECIMAL_PRECISION
+                || scale < 0
+                || scale > precision
+                || scale > GBASE_MAX_DECIMAL_SCALE) {
+            throw unsupportedTargetType(
+                    column,
+                    "GBase 8a DECIMAL requires precision <= 65, scale <= 30 and scale <= precision");
+        }
+        return "DECIMAL(" + precision + "," + scale + ")";
+    }
+
+    private static UnsupportedOperationException unsupportedTargetType(
+            Column column,
+            String reason) {
+        return new UnsupportedOperationException(
+                "GBase 8a cannot auto-create target column '"
+                        + column.getName()
+                        + "' from Flux type "
+                        + column.getDataType().getSqlType()
+                        + ": "
+                        + reason);
     }
 
     private static FluxDataType<?> mapType(
@@ -163,7 +268,7 @@ public final class GBase8aTypeMapper implements JdbcTypeMapper {
     }
 
     private static FluxDataType<?> decimal(int precision, int scale) {
-        if (precision > MAX_DECIMAL_PRECISION) {
+        if (precision > MAX_FLUX_DECIMAL_PRECISION) {
             return BasicType.STRING_TYPE;
         }
         int resolvedPrecision = precision > 0
@@ -185,10 +290,10 @@ public final class GBase8aTypeMapper implements JdbcTypeMapper {
             return;
         }
         if (type == SqlType.DECIMAL) {
-            if (precision > 0 && precision <= MAX_DECIMAL_PRECISION) {
+            if (precision > 0 && precision <= MAX_FLUX_DECIMAL_PRECISION) {
                 builder.precision(precision);
             }
-            if (scale >= 0 && precision > 0 && precision <= MAX_DECIMAL_PRECISION) {
+            if (scale >= 0 && precision > 0 && precision <= MAX_FLUX_DECIMAL_PRECISION) {
                 builder.scale(Math.min(scale, precision));
             }
             return;

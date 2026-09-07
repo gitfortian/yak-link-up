@@ -1,6 +1,8 @@
 package com.link.up.connector.jdbc.core.dialect.gbase.gbase8a;
 
 import com.link.up.api.table.catalog.Column;
+import com.link.up.api.table.type.BasicType;
+import com.link.up.api.table.type.DecimalType;
 import com.link.up.api.table.type.SqlType;
 import org.junit.Test;
 
@@ -9,6 +11,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.Types;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 
 public class GBase8aTypeMapperTest {
 
@@ -31,8 +34,61 @@ public class GBase8aTypeMapperTest {
     }
 
     @Test
-    public void oversizedDecimalFallsBackToStringInsteadOfLosingPrecision() throws Exception {
+    public void oversizedReadDecimalFallsBackToStringInsteadOfLosingPrecision() throws Exception {
         assertType(SqlType.STRING, "DECIMAL", Types.DECIMAL, 65, 30);
+    }
+
+    @Test
+    public void mapsSafeAutomaticTargetTypes() {
+        assertEquals(
+                "VARCHAR(255)",
+                mapper.toDatabaseType(
+                        Column.builder("name", BasicType.STRING_TYPE)
+                                .length(255L)
+                                .build()));
+        assertEquals(
+                "LONGTEXT",
+                mapper.toDatabaseType(
+                        Column.builder("payload", BasicType.STRING_TYPE)
+                                .length(9000L)
+                                .build()));
+        assertEquals(
+                "LONGTEXT",
+                mapper.toDatabaseType(
+                        Column.builder("unknown_text", BasicType.STRING_TYPE)
+                                .build()));
+        assertEquals(
+                "LONGBLOB",
+                mapper.toDatabaseType(
+                        Column.builder("payload_bin", BasicType.BYTES_TYPE)
+                                .build()));
+        assertEquals(
+                "DATETIME",
+                mapper.toDatabaseType(
+                        Column.builder("created_at", BasicType.TIMESTAMP_TYPE)
+                                .build()));
+        assertEquals(
+                "DECIMAL(38,18)",
+                mapper.toDatabaseType(
+                        Column.builder("amount", new DecimalType(38, 18))
+                                .build()));
+    }
+
+    @Test
+    public void rejectsAutomaticTargetTypesThatWouldLoseSemantics() {
+        UnsupportedOperationException timezone = assertThrows(
+                UnsupportedOperationException.class,
+                () -> mapper.toDatabaseType(
+                        Column.builder("created_at", BasicType.TIMESTAMP_TZ_TYPE)
+                                .build()));
+        assertEquals(true, timezone.getMessage().contains("TIMESTAMP WITH TIME ZONE"));
+
+        UnsupportedOperationException decimal = assertThrows(
+                UnsupportedOperationException.class,
+                () -> mapper.toDatabaseType(
+                        Column.builder("amount", new DecimalType(65, 31))
+                                .build()));
+        assertEquals(true, decimal.getMessage().contains("scale <= 30"));
     }
 
     private void assertType(
