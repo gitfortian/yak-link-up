@@ -33,13 +33,12 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * GBase 8s Catalog for bounded/offline Source and existing-table JDBC Sink jobs.
+ * GBase 8s Catalog for bounded/offline Source, JDBC Sink and safe automatic target creation.
  *
  * <p>GBase 8s JDBC exposes database as catalog and table owner as schema. The JDBC URL binds this
- * Catalog to one database. Sink support deliberately implements {@link WritableCatalog} only so
- * the shared save-mode lifecycle can validate pre-created targets and optionally truncate their
- * data. Structure-changing DDL, cross-database rebinding and SQLMODE expansion remain outside this
- * stage.</p>
+ * Catalog to one database. The Sink may create a missing target table using a conservative native
+ * type subset, while CREATE/DROP DATABASE, DROP TABLE, ADD COLUMN, cross-database rebinding and
+ * SQLMODE expansion remain outside this stage.</p>
  */
 public final class GBase8sCatalog implements WritableCatalog {
 
@@ -75,10 +74,10 @@ public final class GBase8sCatalog implements WritableCatalog {
         this.catalogName = catalogName.trim();
         this.config = config;
         this.defaultDatabase = defaultDatabase.trim();
-        this.defaultOwner = hasText(defaultOwner) ? defaultOwner.trim() : null;
         this.delimitedIdentifiers = GBase8sJdbcUrl.delimitedIdentifiersEnabled(
                 config.getUrl(),
                 config.getProperties());
+        this.defaultOwner = normalizeIdentifier(defaultOwner);
     }
 
     @Override
@@ -155,7 +154,7 @@ public final class GBase8sCatalog implements WritableCatalog {
         checkOpened();
         requireCurrentDatabase(databaseName);
         String owner = hasText(schemaName)
-                ? schemaName.trim()
+                ? normalizeIdentifier(schemaName)
                 : defaultOwner;
 
         try (Connection connection = newConnection();
@@ -243,12 +242,43 @@ public final class GBase8sCatalog implements WritableCatalog {
         throw unsupportedSchemaDdl("drop database");
     }
 
+    /** Creates only a missing table inside the database selected by the JDBC URL. */
     @Override
     public void createTable(
             CatalogTable table,
             boolean ignoreIfExists)
             throws CatalogException, DatabaseNotFoundException, TableAlreadyExistsException {
-        throw unsupportedSchemaDdl("create table");
+        checkOpened();
+        if (table == null) {
+            throw new IllegalArgumentException("table must not be null");
+        }
+
+        TablePath normalized = normalizeCreateTablePath(table.getTablePath());
+        if (tableExists(normalized)) {
+            if (ignoreIfExists) {
+                return;
+            }
+            throw new TableAlreadyExistsException(catalogName, normalized);
+        }
+
+        CatalogTable ddlTable = table.getTablePath().equals(normalized)
+                ? table
+                : table.withPath(normalized);
+        String sql = new GBase8sCreateTableSqlBuilder(
+                normalized,
+                ddlTable,
+                typeMapper,
+                delimitedIdentifiers)
+                .build();
+
+        try (Connection connection = newConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new CatalogException(
+                    "自动创建 GBase 8s 目标表失败，table=" + normalized,
+                    e);
+        }
     }
 
     @Override
@@ -335,6 +365,23 @@ public final class GBase8sCatalog implements WritableCatalog {
         }
     }
 
+    private TablePath normalizeCreateTablePath(TablePath tablePath) {
+        if (tablePath == null) {
+            throw new IllegalArgumentException("tablePath must not be null");
+        }
+        requireCurrentDatabase(tablePath.getDatabaseName());
+        if (!hasText(tablePath.getTableName())) {
+            throw new IllegalArgumentException("table name must not be empty");
+        }
+        String owner = hasText(tablePath.getSchemaName())
+                ? normalizeIdentifier(tablePath.getSchemaName())
+                : defaultOwner;
+        return TablePath.of(
+                defaultDatabase,
+                owner,
+                normalizeIdentifier(tablePath.getTableName()));
+    }
+
     private TablePath normalizeTablePath(
             Connection connection,
             TablePath tablePath,
@@ -348,9 +395,9 @@ public final class GBase8sCatalog implements WritableCatalog {
         }
 
         String owner = hasText(tablePath.getSchemaName())
-                ? tablePath.getSchemaName().trim()
+                ? normalizeIdentifier(tablePath.getSchemaName())
                 : defaultOwner;
-        String tableName = tablePath.getTableName().trim();
+        String tableName = normalizeIdentifier(tablePath.getTableName());
 
         try (ResultSet resultSet = connection.getMetaData().getTables(
                 defaultDatabase,
@@ -364,13 +411,13 @@ public final class GBase8sCatalog implements WritableCatalog {
                     continue;
                 }
                 String candidate = resultSet.getString("TABLE_NAME");
-                if (!tableName.equals(candidate)) {
+                if (!identifierEquals(tableName, candidate)) {
                     continue;
                 }
                 String candidateOwner = resultSet.getString("TABLE_SCHEM");
                 if (hasText(owner)
                         && hasText(candidateOwner)
-                        && !owner.equals(candidateOwner.trim())) {
+                        && !identifierEquals(owner, candidateOwner.trim())) {
                     continue;
                 }
                 matches++;
@@ -400,7 +447,7 @@ public final class GBase8sCatalog implements WritableCatalog {
         if (hasText(databaseName)
                 && !defaultDatabase.equalsIgnoreCase(databaseName.trim())) {
             throw new IllegalArgumentException(
-                    "GBase 8s existing-table JDBC stage 不支持跨 database table_path；当前 JDBC database="
+                    "GBase 8s JDBC stage 不支持跨 database table_path；当前 JDBC database="
                             + defaultDatabase
                             + "，请求 database="
                             + databaseName);
@@ -430,6 +477,25 @@ public final class GBase8sCatalog implements WritableCatalog {
         return value.toLowerCase(Locale.ROOT);
     }
 
+    private String normalizeIdentifier(String value) {
+        if (!hasText(value)) {
+            return null;
+        }
+        String normalized = value.trim();
+        return delimitedIdentifiers
+                ? normalized
+                : normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private boolean identifierEquals(String expected, String actual) {
+        if (expected == null || actual == null) {
+            return expected == null && actual == null;
+        }
+        return delimitedIdentifiers
+                ? expected.equals(actual)
+                : expected.equalsIgnoreCase(actual);
+    }
+
     private Connection newConnection() throws SQLException {
         return DriverManager.getConnection(config.getUrl(), config.toConnectionProperties());
     }
@@ -453,9 +519,9 @@ public final class GBase8sCatalog implements WritableCatalog {
 
     private static CatalogException unsupportedSchemaDdl(String operation) {
         return new CatalogException(
-                "GBase 8s existing-table JDBC Sink does not support "
+                "GBase 8s automatic-target JDBC Sink does not support "
                         + operation
-                        + "; pre-create the target database/owner/table and keep schema mutation outside this stage");
+                        + "; only safe creation of a missing target table is enabled in this stage");
     }
 
     private static boolean isBaseTable(String tableType) {

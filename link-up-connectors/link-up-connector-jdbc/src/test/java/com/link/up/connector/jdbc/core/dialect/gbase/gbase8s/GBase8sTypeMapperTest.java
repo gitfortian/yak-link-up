@@ -1,6 +1,8 @@
 package com.link.up.connector.jdbc.core.dialect.gbase.gbase8s;
 
 import com.link.up.api.table.catalog.Column;
+import com.link.up.api.table.type.BasicType;
+import com.link.up.api.table.type.DecimalType;
 import com.link.up.api.table.type.SqlType;
 import org.junit.Test;
 
@@ -9,6 +11,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.Types;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class GBase8sTypeMapperTest {
@@ -80,6 +83,61 @@ public class GBase8sTypeMapperTest {
                 SqlType.STRING,
                 map("SOME_OPAQUE_TYPE", Types.OTHER, 0, 0)
                         .getDataType().getSqlType());
+    }
+
+    @Test
+    public void mapsPortableAutomaticTargetTypes() {
+        assertEquals(
+                "VARCHAR(8000)",
+                mapper.toDatabaseType(
+                        Column.builder("name", BasicType.STRING_TYPE)
+                                .length(8000L)
+                                .build()));
+        assertEquals(
+                "TEXT",
+                mapper.toDatabaseType(
+                        Column.builder("name", BasicType.STRING_TYPE)
+                                .length(8001L)
+                                .build()));
+        assertEquals(
+                "TEXT",
+                mapper.toDatabaseType(Column.builder("name", BasicType.STRING_TYPE).build()));
+
+        assertEquals("BOOLEAN", target(BasicType.BOOLEAN_TYPE));
+        assertEquals("SMALLINT", target(BasicType.BYTE_TYPE));
+        assertEquals("SMALLINT", target(BasicType.SHORT_TYPE));
+        assertEquals("INTEGER", target(BasicType.INT_TYPE));
+        assertEquals("BIGINT", target(BasicType.LONG_TYPE));
+        assertEquals("SMALLFLOAT", target(BasicType.FLOAT_TYPE));
+        assertEquals("FLOAT", target(BasicType.DOUBLE_TYPE));
+        assertEquals("BYTE", target(BasicType.BYTES_TYPE));
+        assertEquals("DATE", target(BasicType.DATE_TYPE));
+        assertEquals("DATETIME HOUR TO SECOND", target(BasicType.TIME_TYPE));
+        assertEquals("DATETIME YEAR TO FRACTION(5)", target(BasicType.TIMESTAMP_TYPE));
+        assertEquals(
+                "DECIMAL(20,4)",
+                mapper.toDatabaseType(
+                        Column.builder("amount", new DecimalType(20, 4)).build()));
+    }
+
+    @Test
+    public void rejectsUnsafeAutomaticTargetTypesAndPrecision() {
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> mapper.toDatabaseType(
+                        Column.builder("amount", new DecimalType(33, 4)).build()));
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> mapper.toDatabaseType(
+                        Column.builder("event_time", BasicType.TIMESTAMP_TZ_TYPE).build()));
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> mapper.toDatabaseType(
+                        Column.builder("unknown", BasicType.NULL_TYPE).build()));
+    }
+
+    private String target(com.link.up.api.table.type.FluxDataType<?> type) {
+        return mapper.toDatabaseType(Column.builder("value", type).build());
     }
 
     private Column map(

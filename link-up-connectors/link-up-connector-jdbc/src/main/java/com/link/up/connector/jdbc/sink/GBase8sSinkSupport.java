@@ -1,11 +1,16 @@
 package com.link.up.connector.jdbc.sink;
 
+import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
+import com.link.up.connector.jdbc.catalog.gbase.gbase8s.GBase8sCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.gbase.gbase8s.GBase8sJdbcUrl;
+import com.link.up.connector.jdbc.core.dialect.gbase.gbase8s.GBase8sTypeMapper;
 
-/** Target-path normalization and validation for the GBase 8s existing-table JDBC Sink. */
+import java.util.Locale;
+
+/** Target-path and automatic-DDL support for the GBase 8s JDBC Sink. */
 final class GBase8sSinkSupport {
 
     private GBase8sSinkSupport() {
@@ -34,7 +39,7 @@ final class GBase8sSinkSupport {
         return TablePath.of(
                 requireUrlDatabase(config),
                 defaultOwner(config),
-                requireTableName(sourcePath));
+                requireTableName(config, sourcePath));
     }
 
     /**
@@ -49,12 +54,12 @@ final class GBase8sSinkSupport {
         }
         validateExplicitTargetPath(config, targetPath);
         String owner = hasText(targetPath.getSchemaName())
-                ? targetPath.getSchemaName().trim()
+                ? normalizeIdentifier(config, targetPath.getSchemaName())
                 : defaultOwner(config);
         return TablePath.of(
                 requireUrlDatabase(config),
                 owner,
-                requireTableName(targetPath));
+                requireTableName(config, targetPath));
     }
 
     /** Normalizes an already prepared target while preserving its selected owner. */
@@ -70,9 +75,9 @@ final class GBase8sSinkSupport {
             throw crossDatabase(database, tablePath.getDatabaseName());
         }
         String owner = hasText(tablePath.getSchemaName())
-                ? tablePath.getSchemaName().trim()
+                ? normalizeIdentifier(config, tablePath.getSchemaName())
                 : defaultOwner(config);
-        return TablePath.of(database, owner, requireTableName(tablePath));
+        return TablePath.of(database, owner, requireTableName(config, tablePath));
     }
 
     static void validateExplicitTargetPath(
@@ -88,12 +93,35 @@ final class GBase8sSinkSupport {
         }
     }
 
+    /** Builds the same safe CREATE TABLE SQL used by {@code GBase8sCatalog#createTable}. */
+    static String resolveCreateTableSql(
+            JdbcConnectionConfig config,
+            CatalogTable table) {
+        if (config == null || table == null) {
+            return null;
+        }
+
+        TablePath targetPath = resolvePreparedTargetPath(config, table.getTablePath());
+        CatalogTable ddlTable = table.getTablePath().equals(targetPath)
+                ? table
+                : table.withPath(targetPath);
+        boolean delimitedIdentifiers = GBase8sJdbcUrl.delimitedIdentifiersEnabled(
+                config.getUrl(),
+                config.getProperties());
+        return new GBase8sCreateTableSqlBuilder(
+                targetPath,
+                ddlTable,
+                new GBase8sTypeMapper(),
+                delimitedIdentifiers)
+                .build();
+    }
+
     private static String defaultOwner(JdbcConnectionConfig config) {
         if (hasText(config.getSchema())) {
-            return config.getSchema().trim();
+            return normalizeIdentifier(config, config.getSchema());
         }
         return hasText(config.getUsername())
-                ? config.getUsername().trim()
+                ? normalizeIdentifier(config, config.getUsername())
                 : null;
     }
 
@@ -105,11 +133,28 @@ final class GBase8sSinkSupport {
         return database.trim();
     }
 
-    private static String requireTableName(TablePath tablePath) {
+    private static String requireTableName(
+            JdbcConnectionConfig config,
+            TablePath tablePath) {
         if (!hasText(tablePath.getTableName())) {
             throw new IllegalArgumentException("GBase 8s target table name must not be empty");
         }
-        return tablePath.getTableName().trim();
+        return normalizeIdentifier(config, tablePath.getTableName());
+    }
+
+    private static String normalizeIdentifier(
+            JdbcConnectionConfig config,
+            String value) {
+        String normalized = value == null ? null : value.trim();
+        if (!hasText(normalized)) {
+            return normalized;
+        }
+        if (GBase8sJdbcUrl.delimitedIdentifiersEnabled(
+                config.getUrl(),
+                config.getProperties())) {
+            return normalized;
+        }
+        return normalized.toLowerCase(Locale.ROOT);
     }
 
     private static IllegalArgumentException crossDatabase(

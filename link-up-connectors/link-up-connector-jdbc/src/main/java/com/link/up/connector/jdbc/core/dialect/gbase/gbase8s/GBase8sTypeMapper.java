@@ -15,18 +15,24 @@ import java.sql.Types;
 import java.util.Locale;
 
 /**
- * GBase 8s read-side type mapper.
+ * GBase 8s read-side and safe automatic-target type mapper.
  *
- * <p>The mapper covers stable built-in scalar and large-object types. INTERVAL and unknown or
- * extension types use a STRING boundary instead of leaking driver-specific Java objects into
- * Link-Up. Target DDL type generation remains disabled because the current Sink writes only to
- * pre-created tables.</p>
+ * <p>The read path covers stable built-in scalar and large-object types. INTERVAL and unknown or
+ * extension types keep the existing STRING boundary instead of leaking driver-specific Java
+ * objects into Link-Up. Automatic target creation deliberately exposes only a conservative native
+ * GBase 8s type subset and does not assume Oracle/MySQL SQLMODE compatibility.</p>
  */
 public final class GBase8sTypeMapper implements JdbcTypeMapper {
 
     private static final int MAX_DECIMAL_PRECISION = 38;
     private static final int DEFAULT_DECIMAL_PRECISION = 38;
     private static final int DEFAULT_DECIMAL_SCALE = 18;
+
+    /** Conservative V8.8 target limits used by automatic table creation. */
+    private static final int TARGET_MAX_DECIMAL_PRECISION = 32;
+    private static final int TARGET_DEFAULT_DECIMAL_PRECISION = 32;
+    private static final int TARGET_DEFAULT_DECIMAL_SCALE = 18;
+    private static final long SAFE_VARCHAR_LENGTH = 8000L;
 
     @Override
     public Column map(ResultSetMetaData metadata, int columnIndex) throws SQLException {
@@ -68,10 +74,106 @@ public final class GBase8sTypeMapper implements JdbcTypeMapper {
         return builder.build();
     }
 
+    /**
+     * Maps a Link-Up column to the portable native GBase 8s type used for automatic target creation.
+     *
+     * <p>Defaults, SERIAL/BIGSERIAL generation, comments and compatibility-mode type aliases are
+     * intentionally not copied here.</p>
+     */
     @Override
     public String toDatabaseType(Column column) {
-        throw new UnsupportedOperationException(
-                "GBase 8s existing-table JDBC Sink does not generate target DDL types");
+        if (column == null || column.getDataType() == null) {
+            throw new IllegalArgumentException("column/dataType must not be null");
+        }
+
+        SqlType type = column.getDataType().getSqlType();
+        switch (type) {
+            case STRING:
+                return stringTargetType(column);
+            case BOOLEAN:
+                return "BOOLEAN";
+            case TINYINT:
+            case SMALLINT:
+                return "SMALLINT";
+            case INT:
+                return "INTEGER";
+            case BIGINT:
+                return "BIGINT";
+            case FLOAT:
+                return "SMALLFLOAT";
+            case DOUBLE:
+                return "FLOAT";
+            case DECIMAL:
+                return decimalTargetType(column);
+            case BYTES:
+                return "BYTE";
+            case DATE:
+                return "DATE";
+            case TIME:
+                return "DATETIME HOUR TO SECOND";
+            case TIMESTAMP:
+                return "DATETIME YEAR TO FRACTION(5)";
+            case TIMESTAMP_TZ:
+                throw unsupportedTargetType(
+                        column,
+                        "TIMESTAMP WITH TIME ZONE is compatibility-mode specific and is not enabled in the native GBase 8s stage");
+            case ARRAY:
+            case MAP:
+            case ROW:
+            case NULL:
+            default:
+                throw unsupportedTargetType(
+                        column,
+                        "automatic target creation only supports scalar relational types");
+        }
+    }
+
+    private static String stringTargetType(Column column) {
+        Long length = column.getLength();
+        if (length != null && length > 0 && length <= SAFE_VARCHAR_LENGTH) {
+            return "VARCHAR(" + length + ")";
+        }
+        return "TEXT";
+    }
+
+    private static String decimalTargetType(Column column) {
+        int precision = TARGET_DEFAULT_DECIMAL_PRECISION;
+        int scale = TARGET_DEFAULT_DECIMAL_SCALE;
+
+        if (column.getDataType() instanceof DecimalType) {
+            DecimalType decimal = (DecimalType) column.getDataType();
+            precision = decimal.getPrecision();
+            scale = decimal.getScale();
+        } else {
+            if (column.getPrecision() != null && column.getPrecision() > 0) {
+                precision = column.getPrecision();
+            }
+            if (column.getScale() != null && column.getScale() >= 0) {
+                scale = column.getScale();
+            }
+        }
+
+        if (precision <= 0
+                || precision > TARGET_MAX_DECIMAL_PRECISION
+                || scale < 0
+                || scale > precision) {
+            throw unsupportedTargetType(
+                    column,
+                    "native GBase 8s automatic DECIMAL target requires precision <= 32 and scale <= precision");
+        }
+        return "DECIMAL(" + precision + "," + scale + ")";
+    }
+
+    private static UnsupportedOperationException unsupportedTargetType(
+            Column column,
+            String reason) {
+        return new UnsupportedOperationException(
+                "GBase 8s cannot auto-create target column '"
+                        + column.getName()
+                        + "' from Flux type "
+                        + column.getDataType().getSqlType()
+                        + ": "
+                        + reason);
     }
 
     private static FluxDataType<?> mapType(
