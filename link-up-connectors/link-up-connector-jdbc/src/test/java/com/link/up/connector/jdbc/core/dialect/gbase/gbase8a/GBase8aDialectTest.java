@@ -83,7 +83,7 @@ public class GBase8aDialectTest {
     }
 
     @Test
-    public void existingTableSinkUsesPortableInsertAndStillRejectsUpsert() {
+    public void sinkUsesPortableInsertAndAutomaticDdlTypesButStillRejectsUpsert() {
         GBase8aDialect dialect = dialect();
         Catalog catalog = dialect.createCatalog(config(baseUrl(), null, null));
         assertTrue(catalog instanceof WritableCatalog);
@@ -97,10 +97,10 @@ public class GBase8aDialectTest {
                 Arrays.asList("id", "name"),
                 Collections.singletonList("id")).isPresent());
 
-        Column column = Column.builder("name", BasicType.STRING_TYPE).build();
-        assertThrows(
-                UnsupportedOperationException.class,
-                () -> dialect.typeMapper().toDatabaseType(column));
+        Column column = Column.builder("name", BasicType.STRING_TYPE)
+                .length(255L)
+                .build();
+        assertEquals("VARCHAR(255)", dialect.typeMapper().toDatabaseType(column));
     }
 
     @Test

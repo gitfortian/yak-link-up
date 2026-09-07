@@ -1,11 +1,14 @@
 package com.link.up.connector.jdbc.sink;
 
+import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
+import com.link.up.connector.jdbc.catalog.gbase.gbase8a.GBase8aCreateTableSqlBuilder;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 import com.link.up.connector.jdbc.core.dialect.gbase.gbase8a.GBase8aJdbcUrl;
+import com.link.up.connector.jdbc.core.dialect.gbase.gbase8a.GBase8aTypeMapper;
 
-/** Target-path normalization and validation for the GBase 8a existing-table JDBC Sink. */
+/** Target-path and automatic-DDL support for the GBase 8a JDBC Sink. */
 final class GBase8aSinkSupport {
 
     private GBase8aSinkSupport() {
@@ -72,6 +75,28 @@ final class GBase8aSinkSupport {
                             + ", targetDatabase="
                             + pathDatabase);
         }
+    }
+
+    /** Builds the same safe CREATE TABLE SQL used by {@code GBase8aCatalog#createTable}. */
+    static String resolveCreateTableSql(
+            JdbcConnectionConfig config,
+            CatalogTable table) {
+        if (config == null || table == null) {
+            return null;
+        }
+
+        TablePath targetPath = resolveTargetPath(config, table.getTablePath());
+        if (targetPath == null) {
+            return null;
+        }
+        CatalogTable ddlTable = table.getTablePath().equals(targetPath)
+                ? table
+                : table.withPath(targetPath);
+        return new GBase8aCreateTableSqlBuilder(
+                targetPath,
+                ddlTable,
+                new GBase8aTypeMapper())
+                .build();
     }
 
     private static boolean hasText(String value) {

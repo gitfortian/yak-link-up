@@ -8,7 +8,6 @@ import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.type.BasicType;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
-import com.link.up.connector.jdbc.core.dialect.gbase.gbase8a.GBase8aDialect;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -17,7 +16,6 @@ import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -78,13 +76,17 @@ public class GBase8aSinkSupportTest {
     }
 
     @Test
-    public void existingTableSinkDoesNotGenerateAutomaticCreateTableSql() {
+    public void automaticCreateTableSqlUsesResolvedTargetDatabaseAndSafeBaseline() {
         JdbcConnectionConfig config = config("target_db", DatabaseIdentifier.GBASE8A);
-        assertNull(
-                JdbcCreateTableSqlResolver.resolve(
-                        new GBase8aDialect(config),
-                        config,
-                        table()));
+        String sql = GBase8aSinkSupport.resolveCreateTableSql(config, table());
+
+        assertEquals(
+                "CREATE TABLE `target_db`.`orders` (\n"
+                        + "    `id` BIGINT NOT NULL\n"
+                        + ");",
+                sql);
+        assertFalse(sql.contains("DISTRIBUTED"));
+        assertFalse(sql.contains("REPLICATED"));
     }
 
     private static CatalogTable table() {

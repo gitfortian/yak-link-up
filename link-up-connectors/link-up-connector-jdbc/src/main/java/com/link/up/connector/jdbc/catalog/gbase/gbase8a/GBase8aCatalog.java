@@ -32,12 +32,12 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * GBase 8a Catalog for bounded/offline Source and existing-table JDBC Sink jobs.
+ * GBase 8a Catalog for bounded/offline Source and JDBC Sink jobs.
  *
- * <p>Metadata uses the standard JDBC {@link DatabaseMetaData} contract. The Sink stage deliberately
- * exposes {@link WritableCatalog} only so the shared save-mode lifecycle can validate existing
- * targets and optionally truncate their data. Structure-changing DDL stays disabled until GBase 8a
- * distribution/MPP table design is modeled explicitly.</p>
+ * <p>Metadata uses the standard JDBC {@link DatabaseMetaData} contract. The Sink can safely create
+ * a missing target table from Link-Up schema metadata and truncate existing data. Database DDL,
+ * destructive table recreation and runtime schema evolution stay disabled; the automatic-target
+ * path never guesses MPP distribution, partition or replication design.</p>
  */
 public final class GBase8aCatalog implements WritableCatalog {
 
@@ -218,12 +218,44 @@ public final class GBase8aCatalog implements WritableCatalog {
         throw unsupportedSchemaDdl("drop database");
     }
 
+    /**
+     * Creates a safe baseline target table. Distribution, partitioning, defaults, identity and
+     * other source physical-design semantics are intentionally not inferred here.
+     */
     @Override
     public void createTable(
             CatalogTable table,
             boolean ignoreIfExists)
             throws CatalogException, DatabaseNotFoundException, TableAlreadyExistsException {
-        throw unsupportedSchemaDdl("create table");
+        checkOpened();
+        if (table == null) {
+            throw new IllegalArgumentException("table must not be null");
+        }
+
+        TablePath normalized = normalizeTablePath(table.getTablePath());
+        requireCurrentDatabase(normalized.getDatabaseName());
+        if (tableExists(normalized)) {
+            if (ignoreIfExists) {
+                return;
+            }
+            throw new TableAlreadyExistsException(catalogName, normalized);
+        }
+
+        CatalogTable ddlTable = table.getTablePath().equals(normalized)
+                ? table
+                : table.withPath(normalized);
+        String sql = new GBase8aCreateTableSqlBuilder(
+                normalized,
+                ddlTable,
+                typeMapper)
+                .build();
+
+        try (Connection connection = newConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new CatalogException("创建 GBase 8a 目标表失败，table=" + normalized, e);
+        }
     }
 
     @Override
@@ -249,6 +281,7 @@ public final class GBase8aCatalog implements WritableCatalog {
             throws CatalogException, TableNotFoundException {
         checkOpened();
         TablePath normalized = normalizeTablePath(tablePath);
+        requireCurrentDatabase(normalized.getDatabaseName());
         if (!tableExists(normalized)) {
             if (ignoreIfNotExists) {
                 return;
@@ -331,6 +364,18 @@ public final class GBase8aCatalog implements WritableCatalog {
         return defaultDatabase;
     }
 
+    private void requireCurrentDatabase(String databaseName) {
+        if (!hasText(databaseName)
+                || !defaultDatabase.equalsIgnoreCase(databaseName.trim())) {
+            throw new IllegalArgumentException(
+                    "GBase 8a automatic-target JDBC stage does not support cross-database DDL; "
+                            + "urlDatabase="
+                            + defaultDatabase
+                            + ", targetDatabase="
+                            + databaseName);
+        }
+    }
+
     private String quoteTable(TablePath tablePath) {
         return quoteIdentifier(tablePath.getDatabaseName())
                 + "."
@@ -367,9 +412,9 @@ public final class GBase8aCatalog implements WritableCatalog {
 
     private static CatalogException unsupportedSchemaDdl(String operation) {
         return new CatalogException(
-                "GBase 8a existing-table JDBC Sink does not support "
+                "GBase 8a automatic-target JDBC stage does not support "
                         + operation
-                        + "; pre-create the target table and keep MPP distribution DDL outside this stage");
+                        + "; only safe CREATE TABLE for a missing target and TRUNCATE are enabled");
     }
 
     private static boolean isBaseTable(String tableType) {

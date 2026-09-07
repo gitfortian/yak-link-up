@@ -201,7 +201,8 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return null;
         }
         if (GBase8aSinkSupport.accepts(config.getConnectionConfig())) {
-            return null;
+            return GBase8aSinkSupport.resolveCreateTableSql(
+                    config.getConnectionConfig(), table);
         }
         if (GBase8sSinkSupport.accepts(config.getConnectionConfig())) {
             return null;
