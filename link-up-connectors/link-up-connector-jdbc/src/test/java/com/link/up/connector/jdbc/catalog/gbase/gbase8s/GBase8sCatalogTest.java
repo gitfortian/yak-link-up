@@ -19,28 +19,29 @@ import static org.junit.Assert.assertTrue;
 public class GBase8sCatalogTest {
 
     @Test
-    public void existingTableSinkCatalogStaysBoundToOneDatabase() {
-        GBase8sCatalog catalog = new GBase8sCatalog(
-                "gbase8s",
-                config(),
-                "testdb",
-                "gbasedbt");
+    public void sinkCatalogStaysBoundToOneDatabase() {
+        GBase8sCatalog catalog = catalog();
 
         assertEquals("testdb", catalog.getDefaultDatabase().get());
         assertTrue(catalog instanceof WritableCatalog);
     }
 
     @Test
-    public void existingTableSinkRejectsStructureChangingDdl() {
-        GBase8sCatalog catalog = new GBase8sCatalog(
-                "gbase8s",
-                config(),
-                "testdb",
-                "gbasedbt");
+    public void automaticCreateTableIsEnabledInsteadOfRejectedAsUnsupportedDdl() {
+        GBase8sCatalog catalog = catalog();
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> catalog.createTable(table(), false));
+        assertTrue(error.getMessage().contains("Catalog 尚未打开"));
+    }
+
+    @Test
+    public void destructiveAndEvolutionDdlRemainBlocked() {
+        GBase8sCatalog catalog = catalog();
 
         assertBlocked(() -> catalog.createDatabase("archive", false), "create database");
         assertBlocked(() -> catalog.dropDatabase("archive", false), "drop database");
-        assertBlocked(() -> catalog.createTable(table(), false), "create table");
         assertBlocked(
                 () -> catalog.addColumn(
                         TablePath.of("testdb", "gbasedbt", "orders"),
@@ -70,6 +71,14 @@ public class GBase8sCatalogTest {
                         "gbasedbt"));
     }
 
+    private static GBase8sCatalog catalog() {
+        return new GBase8sCatalog(
+                "gbase8s",
+                config(),
+                "testdb",
+                "gbasedbt");
+    }
+
     private static CatalogTable table() {
         TableSchema schema = TableSchema.builder()
                 .columns(Collections.singletonList(
@@ -88,7 +97,7 @@ public class GBase8sCatalogTest {
             String operationName) {
         CatalogException error = assertThrows(CatalogException.class, operation::run);
         assertTrue(error.getMessage().contains(operationName));
-        assertTrue(error.getMessage().contains("pre-create"));
+        assertTrue(error.getMessage().contains("only safe creation"));
     }
 
     private static JdbcCatalogConfig config() {

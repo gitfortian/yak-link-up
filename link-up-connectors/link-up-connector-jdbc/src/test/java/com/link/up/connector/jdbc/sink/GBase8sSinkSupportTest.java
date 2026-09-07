@@ -8,7 +8,6 @@ import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.type.BasicType;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
-import com.link.up.connector.jdbc.core.dialect.gbase.gbase8s.GBase8sDialect;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -17,7 +16,6 @@ import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -32,6 +30,37 @@ public class GBase8sSinkSupportTest {
         assertEquals(
                 TablePath.of("targetdb", "sinkowner", "orders"),
                 target);
+    }
+
+    @Test
+    public void defaultModeNormalizesImplicitTargetIdentifiersToLowercase() {
+        TablePath target = GBase8sSinkSupport.resolveImplicitTargetPath(
+                config("targetdb", "SinkOwner", DatabaseIdentifier.GBASE8S),
+                TablePath.of("SOURCE_DB", "PUBLIC", "Orders"));
+
+        assertEquals(
+                TablePath.of("targetdb", "sinkowner", "orders"),
+                target);
+    }
+
+    @Test
+    public void delimidentModePreservesExplicitTargetCase() {
+        JdbcConnectionConfig config = delimitedConfig(
+                "targetdb",
+                "DefaultOwner",
+                DatabaseIdentifier.GBASE8S);
+        TablePath target = GBase8sSinkSupport.resolveExplicitTargetPath(
+                config,
+                TablePath.of(null, "MixedOwner", "Orders"));
+
+        assertEquals(
+                TablePath.of("targetdb", "MixedOwner", "Orders"),
+                target);
+
+        String sql = GBase8sSinkSupport.resolveCreateTableSql(
+                config,
+                table().withPath(target));
+        assertTrue(sql.startsWith("CREATE TABLE \"MixedOwner\".\"Orders\" ("));
     }
 
     @Test
@@ -88,17 +117,36 @@ public class GBase8sSinkSupportTest {
     }
 
     @Test
-    public void existingTableSinkDoesNotGenerateAutomaticCreateTableSql() {
+    public void automaticCreateTableSqlUsesPreparedTargetOwnerAndTypes() {
         JdbcConnectionConfig config = config(
                 "targetdb",
                 "sinkowner",
                 DatabaseIdentifier.GBASE8S);
+        TablePath targetPath = GBase8sSinkSupport.resolveImplicitTargetPath(
+                config,
+                table().getTablePath());
+        CatalogTable target = table().withPath(targetPath);
 
-        assertNull(
-                JdbcCreateTableSqlResolver.resolve(
-                        new GBase8sDialect(config),
-                        config,
-                        table()));
+        String sql = GBase8sSinkSupport.resolveCreateTableSql(config, target);
+
+        assertTrue(sql.startsWith("CREATE TABLE sinkowner.orders ("));
+        assertTrue(sql.contains("id INTEGER NOT NULL"));
+        assertFalse(sql.contains("source_db"));
+        assertFalse(sql.contains("public.orders"));
+    }
+
+    @Test
+    public void automaticDdlPreviewRejectsCrossDatabasePreparedTarget() {
+        JdbcConnectionConfig config = config(
+                "targetdb",
+                "sinkowner",
+                DatabaseIdentifier.GBASE8S);
+        CatalogTable target = table().withPath(
+                TablePath.of("otherdb", "sinkowner", "orders"));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GBase8sSinkSupport.resolveCreateTableSql(config, target));
     }
 
     private static CatalogTable table() {
@@ -119,12 +167,28 @@ public class GBase8sSinkSupportTest {
             String database,
             String schema,
             String dialect) {
+        return config(database, schema, dialect, false);
+    }
+
+    private static JdbcConnectionConfig delimitedConfig(
+            String database,
+            String schema,
+            String dialect) {
+        return config(database, schema, dialect, true);
+    }
+
+    private static JdbcConnectionConfig config(
+            String database,
+            String schema,
+            String dialect,
+            boolean delimident) {
         Map<String, Object> values = new LinkedHashMap<String, Object>();
         values.put(
                 "url",
                 "jdbc:gbasedbt-sqli://127.0.0.1:9088/"
                         + database
-                        + ":GBASEDBTSERVER=gbase01;IFX_LOCK_MODE_WAIT=10");
+                        + ":GBASEDBTSERVER=gbase01;IFX_LOCK_MODE_WAIT=10"
+                        + (delimident ? ";DELIMIDENT=y" : ""));
         values.put("driver", "com.gbasedbt.jdbc.Driver");
         values.put("username", "gbasedbt");
         if (schema != null) {

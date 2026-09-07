@@ -17,8 +17,8 @@ import java.util.Locale;
 /**
  * GBase 8s bounded/offline JDBC dialect.
  *
- * <p>The current stages cover bounded Source plus an existing-table INSERT/batch Sink on the
- * native GBase 8s JDBC protocol and normal SQL mode. Automatic DDL, MERGE/UPSERT abstraction,
+ * <p>The current native/normal-mode stage covers bounded Source, JDBC INSERT/batch Sink and safe
+ * creation of a missing target table. Destructive/evolution DDL, MERGE/UPSERT abstraction,
  * SQLMODE compatibility expansion, CDC and realtime semantics remain separate stages.</p>
  */
 public final class GBase8sDialect implements JdbcDialect {
@@ -236,7 +236,7 @@ public final class GBase8sDialect implements JdbcDialect {
         if (!JdbcDialect.hasText(requestedDatabase)
                 || !databaseName.equalsIgnoreCase(requestedDatabase.trim())) {
             throw new IllegalArgumentException(
-                    "GBase 8s existing-table JDBC stage 不支持跨 database table_path；当前 JDBC database="
+                    "GBase 8s JDBC stage 不支持跨 database table_path；当前 JDBC database="
                             + databaseName
                             + "，请求 database="
                             + requestedDatabase);
