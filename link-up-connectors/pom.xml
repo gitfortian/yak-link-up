@@ -26,6 +26,7 @@
         <module>link-up-connector-mongodb</module>
         <module>link-up-connector-datagen</module>
         <module>link-up-connector-print</module>
+        <module>link-up-connector-file</module>
     </modules>
 
 </project>

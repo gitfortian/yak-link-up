@@ -108,7 +108,7 @@ Option 命名 snake_case,统一带 `withSemanticType` 与 `withScope`,与 MongoS
 | `header` | boolean | `false` | TASK | 首行为表头:列名取自首行且该行不输出;与 `schema` 互斥 |
 | `null_value` | string | 无 | TASK | 视为 null 的文本(如 `\N`);不配则空值语义由转换器定义 |
 | `encoding` | string | `UTF-8` | TASK | 显式指定,不做自动探测 |
-| `compression` | string(none/gz/auto) | `auto` | TASK | auto 按扩展名识别 gzip;显式值与扩展名冲突时报错 |
+| `compression` | string(none/gz/auto) | `auto` | TASK | auto 按**每个文件**的扩展名识别 gzip(目录可混合);显式 none 遇 .gz 文件在枚举期报错 |
 | `table_name` | string | 由 path 推导 | TASK | dataSetId / 目标逻辑表名 |
 | `split_size` | long(bytes) | `134217728`(128MB) | RUNTIME | 单 split 目标大小,下限 `1048576`(1MB);行对齐可能使实际 split 略大 |
 | `recursive` | boolean | `true` | RUNTIME | 目录/前缀递归枚举 |
@@ -204,8 +204,9 @@ close()                 -> 关闭全部剩余资源
 
 - **表头只跳一次**:`skip_header_rows` 生效时,仅 split 的 `startOffset == 0` 跳过前 N 行;续接 split 从精确行边界开始,天然不含表头。`header=true` 隐含跳过首行,同样只发生在 offset==0 的 split。
 - **fields 投影**:在转换器边界应用(与 Mongo `fields` 同构),split/流层面不做列裁剪——文本格式裁列不省 IO,只增加解析分支。
-- **行号语义**:异常消息报告"文件内绝对行号",由 `startOffset` 前的行数 + 本 split 已读行数推得;被跳过的表头行计入行号。
+- **行号语义**:异常消息报告 `fileKey + split 字节起点 + split 内行号`,可唯一定位出错位置;跨 split 的绝对行号需要额外扫描,不在 Source 侧维护。
 - **空文件 / 空目录**:空文件产出 0 个 split;过滤后 path 未匹配到任何文件时在枚举期抛 `TABLE_NOT_EXISTED` 语义错误(见 §9),不静默成功。
+- **压缩按文件判定**:`compression=auto` 时枚举器对每个文件按扩展名识别 gzip 并整文件规划;显式 `none` 遇 `.gz` 文件在枚举期报错。
 - **batchSize**:沿用框架传入值;单行超过 batch 预期大小不特殊处理,由 `RecordBatch` 语义兜底。
 - 转换器(`converter` 包)把字符串/JSON 值按目标 `TableSchema` 转成 Flux 物理类型,`null_value` 命中的字段转 null;无法安全转换(如非数字文本进 BIGINT 列)时 fail-fast,不做隐式截断,与 ClickHouse/DB2 适配的既有立场一致。
 
