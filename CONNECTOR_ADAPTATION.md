@@ -102,9 +102,9 @@ Print Sink：
 
 ## File Source
 
-`link-up-connector-file`（identifier `file`）从本地文件系统与 S3 读取有界文本数据，设计规范见 `FILE_SOURCE_DESIGN.md`。
+`link-up-connector-file`（identifier `file`）从本地文件系统、S3 与 SFTP 读取有界文本数据，设计规范见 `FILE_SOURCE_DESIGN.md`。
 
-- 存储接入收敛在 internal 包的 `FileStorage` 接口（list / openRange / exists），`LocalFileStorage` 与 `S3FileStorage` 各自持有并关闭客户端，AWS SDK 类型不出 internal；SFTP/HDFS 是后续的第三、第四实现候选。
+- 存储接入收敛在 internal 包的 `FileStorage` 接口（list / openRange / exists），`LocalFileStorage`、`S3FileStorage`（AWS SDK v2）与 `SftpFileStorage`（JSch）各自持有并关闭客户端，SDK 类型不出 internal；HDFS 是后续候选。SFTP 压缩/格式/拆分链路与 local/S3 完全复用，`openRange` 通过流内丢弃偏移字节实现，与行对齐拆分天然兼容。
 - 格式 Stage 1 支持 csv/tsv/text/jsonl；csv 用 commons-csv 严格解析（引号、转义、内嵌换行），jsonl 需显式 schema，text 输出单列。
 - 拆分按字节范围 + 行对齐回扫：cut 处引号深度取窗口内引号总数奇偶，候选换行符与 cut 之间引号数保持该深度才是真实行边界；窗口超限 fail-fast。gz 文件按文件判定并整文件单 split。
 - Schema 优先级：显式声明 > csv/tsv 表头发现（全 STRING）> text 单列；jsonl 推断留待后续 Stage。

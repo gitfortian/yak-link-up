@@ -32,6 +32,9 @@ public class FileConnectorPackageBoundaryTest {
                 assertFalse(
                         "AWS SDK imports must stay inside the internal package: " + relative,
                         content.contains("software.amazon.awssdk"));
+                assertFalse(
+                        "JSch imports must stay inside the internal package: " + relative,
+                        content.contains("com.jcraft.jsch"));
             }
         }
     }

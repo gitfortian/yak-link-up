@@ -104,7 +104,13 @@ public final class FileSourceFactory
                         FileSourceOptions.ACCESS_KEY,
                         FileSourceOptions.SECRET_KEY,
                         FileSourceOptions.REGION,
-                        FileSourceOptions.PATH_STYLE_ACCESS)
+                        FileSourceOptions.PATH_STYLE_ACCESS,
+                        FileSourceOptions.HOST,
+                        FileSourceOptions.PORT,
+                        FileSourceOptions.USER,
+                        FileSourceOptions.PASSWORD,
+                        FileSourceOptions.PRIVATE_KEY,
+                        FileSourceOptions.STRICT_HOST_KEY_CHECKING)
                 .exclusive(FileSourceOptions.SCHEMA, FileSourceOptions.HEADER)
                 .build();
     }

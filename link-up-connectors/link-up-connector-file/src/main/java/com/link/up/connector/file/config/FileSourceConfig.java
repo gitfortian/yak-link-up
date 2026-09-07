@@ -29,7 +29,8 @@ public final class FileSourceConfig implements Serializable {
 
     public enum StorageType {
         LOCAL,
-        S3
+        S3,
+        SFTP
     }
 
     private static final long MIN_SPLIT_SIZE = 1048576L;
@@ -58,6 +59,12 @@ public final class FileSourceConfig implements Serializable {
     private final String accessKey;
     private final String secretKey;
     private final boolean pathStyleAccess;
+    private final String host;
+    private final int port;
+    private final String user;
+    private final String password;
+    private final String privateKey;
+    private final boolean strictHostKeyChecking;
 
     private FileSourceConfig(Builder builder) {
         this.path = builder.path;
@@ -85,6 +92,12 @@ public final class FileSourceConfig implements Serializable {
         this.accessKey = builder.accessKey;
         this.secretKey = builder.secretKey;
         this.pathStyleAccess = builder.pathStyleAccess;
+        this.host = builder.host;
+        this.port = builder.port;
+        this.user = builder.user;
+        this.password = builder.password;
+        this.privateKey = builder.privateKey;
+        this.strictHostKeyChecking = builder.strictHostKeyChecking;
     }
 
     public static FileSourceConfig of(ReadonlyConfig config) {
@@ -221,6 +234,30 @@ public final class FileSourceConfig implements Serializable {
         return pathStyleAccess;
     }
 
+    public String getHost() {
+        return host;
+    }
+
+    public int getPort() {
+        return port;
+    }
+
+    public String getUser() {
+        return user;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public String getPrivateKey() {
+        return privateKey;
+    }
+
+    public boolean isStrictHostKeyChecking() {
+        return strictHostKeyChecking;
+    }
+
     @Override
     public String toString() {
         return "FileSourceConfig{"
@@ -260,6 +297,12 @@ public final class FileSourceConfig implements Serializable {
         private String accessKey;
         private String secretKey;
         private boolean pathStyleAccess;
+        private String host;
+        private int port = 22;
+        private String user;
+        private String password;
+        private String privateKey;
+        private boolean strictHostKeyChecking;
 
         private Builder(ReadonlyConfig config) {
             this.config = config;
@@ -280,21 +323,40 @@ public final class FileSourceConfig implements Serializable {
 
         private void parsePathAndStorage() {
             String rawPath = requireText(FileSourceOptions.PATH, "path");
-            String inferred = rawPath.toLowerCase(Locale.ROOT).startsWith("s3://")
-                    ? StorageType.S3.name()
-                    : StorageType.LOCAL.name();
+            String lowered = rawPath.toLowerCase(Locale.ROOT);
+
+            StorageType inferred;
+            String effectivePath = rawPath;
+            if (lowered.startsWith("s3://")) {
+                inferred = StorageType.S3;
+            } else if (lowered.startsWith("sftp://")) {
+                inferred = StorageType.SFTP;
+                effectivePath = rawPath.substring("sftp://".length());
+            } else {
+                inferred = StorageType.LOCAL;
+            }
+
             String explicit = config.getOptional(FileSourceOptions.STORAGE_TYPE)
                     .map(value -> value.trim().toLowerCase(Locale.ROOT))
                     .orElse(null);
-            if (explicit != null && !"local".equals(explicit) && !"s3".equals(explicit)) {
+            if (explicit != null && !"local".equals(explicit) && !"s3".equals(explicit) && !"sftp".equals(explicit)) {
                 throw new IllegalArgumentException(
-                        "storage_type must be local or s3, but was: " + config.get(FileSourceOptions.STORAGE_TYPE));
+                        "storage_type must be local, s3 or sftp, but was: " + config.get(FileSourceOptions.STORAGE_TYPE));
             }
-            if (explicit != null && !explicit.equals(inferred)) {
+            // sftp paths carry no scheme, so storage_type=sftp with a plain
+            // absolute path is the normal declaration and never conflicts.
+            boolean conflict = explicit != null
+                    && (("s3".equals(explicit) && inferred != StorageType.S3)
+                    || ("local".equals(explicit) && inferred != StorageType.LOCAL));
+            if (conflict) {
                 throw new IllegalArgumentException(
                         "storage_type '" + explicit + "' conflicts with the path scheme of '" + rawPath + "'");
             }
-            storageType = StorageType.valueOf(inferred);
+            if (explicit != null) {
+                storageType = StorageType.valueOf(explicit.toUpperCase(Locale.ROOT));
+            } else {
+                storageType = inferred;
+            }
 
             if (storageType == StorageType.S3) {
                 String withoutScheme = rawPath.substring("s3://".length());
@@ -313,7 +375,11 @@ public final class FileSourceConfig implements Serializable {
                 path = keyPrefix;
             } else {
                 bucket = null;
-                path = rawPath;
+                path = effectivePath;
+            }
+            if (storageType == StorageType.SFTP && !path.startsWith("/")) {
+                throw new IllegalArgumentException(
+                        "sftp path must be absolute, but was: " + path);
             }
         }
 
@@ -563,6 +629,10 @@ public final class FileSourceConfig implements Serializable {
         }
 
         private void parseS3Options() {
+            if (storageType == StorageType.SFTP) {
+                parseSftpOptions();
+                return;
+            }
             if (storageType != StorageType.S3) {
                 return;
             }
@@ -595,6 +665,30 @@ public final class FileSourceConfig implements Serializable {
             }
 
             pathStyleAccess = config.get(FileSourceOptions.PATH_STYLE_ACCESS);
+        }
+
+        private void parseSftpOptions() {
+            host = requireText(FileSourceOptions.HOST, "host");
+            user = requireText(FileSourceOptions.USER, "user");
+
+            port = config.get(FileSourceOptions.PORT);
+            if (port <= 0 || port > 65535) {
+                throw new IllegalArgumentException(
+                        "port must be within 1..65535, but was: " + port);
+            }
+
+            password = config.getOptional(FileSourceOptions.PASSWORD)
+                    .map(String::trim)
+                    .orElse(null);
+            privateKey = config.getOptional(FileSourceOptions.PRIVATE_KEY)
+                    .map(String::trim)
+                    .orElse(null);
+            if (password == null && privateKey == null) {
+                throw new IllegalArgumentException(
+                        "sftp requires an authentication method: configure password or private_key");
+            }
+
+            strictHostKeyChecking = config.get(FileSourceOptions.STRICT_HOST_KEY_CHECKING);
         }
 
         private String requireText(

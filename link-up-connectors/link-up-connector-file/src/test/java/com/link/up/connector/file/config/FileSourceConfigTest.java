@@ -191,6 +191,75 @@ public class FileSourceConfigTest {
         assertEquals("content", config.getDeclaredColumns().get(0).getName());
     }
 
+    @Test
+    public void shouldInferSftpFromScheme() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put("path", "sftp:///data/orders");
+        values.put("format", "text");
+        values.put("host", "10.0.0.1");
+        values.put("user", "sync");
+        values.put("password", "pass");
+
+        FileSourceConfig config = FileSourceConfig.of(ReadonlyConfig.fromMap(values));
+
+        assertEquals(FileSourceConfig.StorageType.SFTP, config.getStorageType());
+        assertEquals("/data/orders", config.getPath());
+        assertEquals("orders", config.getTableName());
+    }
+
+    @Test
+    public void shouldAcceptExplicitSftpWithPlainPath() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put("path", "/data/orders");
+        values.put("storage_type", "sftp");
+        values.put("format", "text");
+        values.put("host", "10.0.0.1");
+        values.put("user", "sync");
+        values.put("private_key", "/home/me/id_rsa");
+
+        FileSourceConfig config = FileSourceConfig.of(ReadonlyConfig.fromMap(values));
+
+        assertEquals(FileSourceConfig.StorageType.SFTP, config.getStorageType());
+        assertEquals("/data/orders", config.getPath());
+        assertEquals("orders", config.getTableName());
+    }
+
+    @Test
+    public void shouldRequireHostAndUserForSftp() {
+        Map<String, Object> values = baseSftpWithoutAuth();
+        values.remove("host");
+        values.put("password", "pass");
+
+        try {
+            FileSourceConfig.of(ReadonlyConfig.fromMap(values));
+            fail("Expected sftp without host to be rejected");
+        } catch (IllegalArgumentException failure) {
+            assertTrue(failure.getMessage().contains("host"));
+        }
+    }
+
+    @Test
+    public void shouldRequireAuthForSftp() {
+        Map<String, Object> values = baseSftpWithoutAuth();
+
+        try {
+            FileSourceConfig.of(ReadonlyConfig.fromMap(values));
+            fail("Expected sftp without an authentication method to be rejected");
+        } catch (IllegalArgumentException failure) {
+            assertTrue(failure.getMessage().contains("password or private_key"));
+        }
+    }
+
+    private static Map<String, Object> baseSftpWithoutAuth() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put("path", "/data/orders");
+        values.put("storage_type", "sftp");
+        values.put("format", "text");
+        values.put("host", "10.0.0.1");
+        values.put("user", "sync");
+        return values;
+    }
+
     private static Map<String, Object> baseLocalCsv() {
         Map<String, Object> values = new LinkedHashMap<String, Object>();
         values.put("path", "data/rows.csv");

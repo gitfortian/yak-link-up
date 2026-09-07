@@ -20,7 +20,7 @@ Link-Up 是离线批量数据同步引擎。文件 Source 是"数据落地文件
 ### Stage 1(本文范围)
 
 ```text
-storage:  local(s3 同模块提供)
+storage:  local / s3 / sftp(同一 FileStorage 接口,同一连接器)
 format:   csv / tsv(分隔文本)、jsonl、text(单列)
 schema:   显式声明 或 CSV 表头发现
 split:    字节范围 + 行对齐;gzip 文件整文件单 split
@@ -32,7 +32,7 @@ dataset:  单数据集(一个 path 模式对应一个逻辑表)
 ```text
 Parquet / ORC / Avro 等二进制格式      -> 独立 Stage
 Excel / XML / Markdown / binary 透传  -> 独立 Stage
-SFTP / FTP / HDFS 存储后端            -> FileStorage 第三实现,Stage 2
+FTP / HDFS 存储后端                   -> FileStorage 第四实现,后续 Stage
 SSE-KMS 加密桶、跨账户角色assume      -> 有真实需求再加
 写入端(File Sink)                    -> 独立设计文档
 增量读取 / 文件变更捕获                -> 违反 bounded 边界
@@ -119,6 +119,12 @@ Option 命名 snake_case,统一带 `withSemanticType` 与 `withScope`,与 MongoS
 | `secret_key` | string | 无 | DATASOURCE | 仅 s3,sensitive |
 | `region` | string | 无 | DATASOURCE | 仅 s3;自定义 endpoint 时可省略 |
 | `path_style_access` | boolean | `false` | DATASOURCE | 仅 s3;MinIO 等需要 true |
+| `host` | string | 无 | DATASOURCE | 仅 sftp;SFTP 服务器地址 |
+| `port` | int | `22` | DATASOURCE | 仅 sftp |
+| `user` | string | 无 | DATASOURCE | 仅 sftp;登录用户 |
+| `password` | string | 无 | DATASOURCE | 仅 sftp,sensitive;与 private_key 至少其一 |
+| `private_key` | string | 无 | DATASOURCE | 仅 sftp;SSH 身份文件路径 |
+| `strict_host_key_checking` | boolean | `false` | DATASOURCE | 仅 sftp;是否校验 known_hosts |
 
 刻意不提供的选项与理由:
 
@@ -256,6 +262,8 @@ S3FileStorage     -> aws sdk v2 S3Client(ListObjectsV2 分页 + GetObject range)
 - 抽象放在 `internal` 包。这是"先有两个实现,再做抽象"的正当场景(local/S3 第一天就并存),不是提前抽象;接口只暴露 FileEntry/InputStream,SDK 类型不出 internal。
 - 接口刻意收敛为三个方法:列文件、按范围读、存在性检查。文件族后续扩展(SFTP / HDFS)都是"换一个存储实现"而非"扩接口语义";格式解析、拆分、Reader 全部复用。
 - S3 凭证:显式 `access_key`/`secret_key` 优先;未配置时走 SDK v2 默认凭证链(环境变量、配置文件、容器/实例角色),不引入 provider 类名配置项。
+- SFTP(`internal/SftpFileStorage`,JSch):`listFiles` 递归遍历目录,`openRange` 流式读取后丢弃偏移字节再按长度截断(JSch 的 InputStream 变体不支持服务端 seek,偏差量成为性能瓶颈时再引入 skip 通道变体),`exists` 用 stat;会话与通道归实例所有,close 时断开。`openRange` 语义与行对齐拆分天然兼容。
+- SFTP 路径声明:`storage_type = "sftp"` + 绝对路径,或 `sftp://` scheme 前缀;相对路径拒绝。密码与私钥至少配置其一;默认不校验 known_hosts(与常见同步工具一致),生产环境可开启。
 - S3 客户端参数(endpoint、region、path-style、凭证)由 `FileSourceConfig` 提供并归 `S3FileStorage` 持有与关闭;Enumerator 与 Reader 各自创建自己的 FileStorage 实例,不跨生命周期共享(IO 资源所有权显式,遵循 CODE_STYLE.md §8)。
 - 枚举排序:文件列表按 fileKey 字典序,split 顺序确定,保证 `enumerateSplits()` 可重复。
 
@@ -310,7 +318,7 @@ S3 逻辑通过 `FileStorage` 接口的内存桩(stub)测试,不依赖真实 AWS
 
 - Parquet/ORC 列式读取(独立 Stage,复用 FileStorage 与 split 骨架)。
 - jsonl 采样推断 schema(沿用 Mongo 保守推断策略)。
-- SFTP / HDFS 存储后端:FileStorage 第三、第四实现,格式解析层零改动。
+- HDFS 存储后端:FileStorage 第四实现,格式解析层零改动。
 - 多数据集:目录模式 → 多逻辑表,届时声明 `MULTI_TABLE` 并接受拓扑派生约束。
 - ZIP/TAR 归档压缩。
 - File Sink(local/S3 写出,含 SinkPreparer 提交语义)——单独设计文档。

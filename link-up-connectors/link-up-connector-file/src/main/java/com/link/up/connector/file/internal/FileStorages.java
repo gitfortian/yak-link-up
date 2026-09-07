@@ -12,6 +12,9 @@ public final class FileStorages {
         if (config.isS3()) {
             return new S3FileStorage(config);
         }
+        if (config.getStorageType() == FileSourceConfig.StorageType.SFTP) {
+            return new SftpFileStorage(config);
+        }
         return new LocalFileStorage();
     }
 }
