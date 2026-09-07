@@ -107,6 +107,24 @@ final class JdbcSinkPreparer implements SinkPreparer {
 
     private CatalogTable resolveTargetTable(CatalogTable source) {
         String path = config.resolveTargetTablePath(source.getTablePath());
+
+        if (GBase8sSinkSupport.accepts(config.getConnectionConfig())) {
+            TablePath targetPath;
+            if (path == null) {
+                targetPath = GBase8sSinkSupport.resolveImplicitTargetPath(
+                        config.getConnectionConfig(),
+                        source.getTablePath());
+            } else {
+                TablePath explicit = dialect.parseTablePath(path);
+                targetPath = GBase8sSinkSupport.resolveExplicitTargetPath(
+                        config.getConnectionConfig(),
+                        explicit);
+            }
+            return source.getTablePath().equals(targetPath)
+                    ? source
+                    : source.withPath(targetPath);
+        }
+
         CatalogTable mapped = path == null
                 ? source
                 : source.withPath(dialect.parseTablePath(path));
@@ -150,6 +168,10 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return GBase8aSinkSupport.resolveTargetPath(
                     config.getConnectionConfig(), tablePath);
         }
+        if (GBase8sSinkSupport.accepts(config.getConnectionConfig())) {
+            return GBase8sSinkSupport.resolvePreparedTargetPath(
+                    config.getConnectionConfig(), tablePath);
+        }
         return JdbcCreateTableSqlResolver.resolveTargetPath(
                 config.getConnectionConfig(), tablePath);
     }
@@ -179,6 +201,9 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return null;
         }
         if (GBase8aSinkSupport.accepts(config.getConnectionConfig())) {
+            return null;
+        }
+        if (GBase8sSinkSupport.accepts(config.getConnectionConfig())) {
             return null;
         }
         return JdbcCreateTableSqlResolver.resolve(

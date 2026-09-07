@@ -178,10 +178,9 @@ For large bounded reads, a positive Link-Up `fetch_size` selects the GBase JDBC 
 The vendor GBase JDBC driver is not guessed as a Maven dependency by this module. Deployments must provide the official
 GBase 8a JDBC driver on the runtime classpath and configure `driver = "com.gbase.jdbc.Driver"`.
 
-### GBase 8s bounded Source
+### GBase 8s bounded Source + existing-table JDBC Sink
 
-GBase 8s is exposed as the first-class `gbase8s` JDBC dialect. Stage 1 uses the native GBase 8s JDBC protocol and keeps
-normal GBase SQL semantics separate from later SQLMODE compatibility work:
+GBase 8s is exposed as the first-class `gbase8s` JDBC dialect and uses the native GBase 8s JDBC protocol:
 
 ```hocon
 source {
@@ -192,27 +191,59 @@ source {
   schema = "gbasedbt" # optional table owner; defaults to username
   table_path = "gbasedbt.orders"
 }
+
+sink {
+  type = "jdbc"
+  url = "jdbc:gbasedbt-sqli://gbase8s:9088/archive:GBASEDBTSERVER=gbase01;IFX_LOCK_MODE_WAIT=10"
+  driver = "com.gbasedbt.jdbc.Driver"
+  dialect = "gbase8s"
+  schema = "gbasedbt" # target owner; defaults to username
+  table = "orders"
+  schema_save_mode = "ERROR_WHEN_SCHEMA_NOT_EXIST"
+  data_save_mode = "APPEND_DATA"
+}
 ```
 
-The database and `GBASEDBTSERVER` instance identity are connection-level concerns and must be present in the JDBC URL or
-connection properties. One Stage 1 Source connection is bound to the database in its URL. GBase 8s reports table owner
-through the JDBC schema field, so Link-Up models physical tables as `database.owner.table` metadata while SQL inside the
-selected database uses `owner.table`. The normal user-facing paths are `table` and `owner.table`; a three-part
-`database.owner.table` path is accepted only when its database equals the URL database. Cross-database rebinding is not
-performed implicitly.
+The database and `GBASEDBTSERVER` instance identity are connection-level concerns. One connection stays bound to the
+database in its JDBC URL. GBase 8s reports table owner through the JDBC schema field, so Link-Up models physical tables as
+`database.owner.table` metadata while SQL inside the selected database uses `owner.table`.
 
-The read-only `GBase8sCatalog` uses standard JDBC `DatabaseMetaData` for owner, table, column and primary-key discovery.
-If no owner is supplied, the connector uses the explicit `schema` option and then the JDBC username as the default owner.
-When neither gives an owner and the same table name is visible under multiple owners, metadata preparation fails and asks
-for an explicit `owner.table` instead of guessing.
+For Source, the normal user-facing paths are `table` and `owner.table`; a three-part `database.owner.table` path is
+accepted only when its database equals the URL database. For Sink, an implicit target keeps only the source table name and
+resolves owner from the Sink `schema` option, then the Sink username. Source database/schema/owner metadata is never reused
+implicitly. An explicit `owner.table` may choose the target owner. An explicit three-part target must repeat the database
+from the Sink URL; a different database fails during preparation instead of silently rebinding one connection.
+
+`GBase8sCatalog` uses standard JDBC `DatabaseMetaData` for owner, table, column and primary-key discovery. It implements
+`WritableCatalog` only so the shared Sink save-mode lifecycle can validate existing targets and support `TRUNCATE TABLE`
+for `DROP_DATA`. Structure-changing DDL stays blocked:
+
+- no CREATE/DROP DATABASE
+- no CREATE/DROP TABLE
+- no ADD COLUMN or runtime schema evolution
+- no automatic target-table creation
+
+Create the target database/owner/table before the job. `CREATE_SCHEMA_WHEN_NOT_EXIST` is safe for an existing compatible
+table but fails clearly when the table is absent. `RECREATE_SCHEMA` cannot destructively drop a target because DROP TABLE
+is rejected before recreation. `CREATE_OR_ADD_COLUMNS` may validate an already compatible target, but a missing target
+column fails instead of mutating the table.
+
+The Sink reuses the shared JDBC writer: parameterized `INSERT`, configured batch size, `PreparedStatement.addBatch()` /
+`executeBatch()`, one task-local transaction and the existing commit/rollback, retry/savepoint and dirty-data behavior.
+The vendor `IFX_USEPUT=1` bulk-insert extension is deliberately **opt-in**, not a Link-Up default. It can improve repeated
+INSERT performance, but the vendor extension requires compatible Java/target column types and excludes opaque/complex
+types. Deployments that have verified a compatible scalar target may add `IFX_USEPUT=1` to the JDBC URL/properties.
+
+UPSERT is intentionally not advertised. Native GBase 8s `MERGE` supports a broader update/insert/delete contract than the
+generic Link-Up UPSERT abstraction, so this bounded stage does not guess conflict keys or collapse database-specific MERGE
+semantics into `write_mode=UPSERT`.
 
 GBase 8s JDBC defaults `DELIMIDENT=n`. In that mode double-quoted SQL identifiers are not valid, so the dialect does not
-blindly quote every table/column name. Ordinary unquoted identifiers are normalized to GBase 8s lowercase behavior. If a
-deployment explicitly enables `DELIMIDENT=y` in the URL or JDBC properties, quoted `table_path` parts preserve case and
-SQL identifiers are emitted with double quotes. This keeps the default path compatible while still allowing deliberate
-case-sensitive database objects.
+blindly quote every table/column name. Ordinary unquoted identifiers are normalized to lowercase. If a deployment
+explicitly enables `DELIMIDENT=y` in the URL or JDBC properties, quoted `table_path` parts preserve case and SQL
+identifiers are emitted with double quotes.
 
-The Stage 1 type boundary covers common built-ins without exposing GBase JDBC private objects:
+The read-side type boundary covers common built-ins without exposing GBase JDBC private objects:
 
 - BOOLEAN -> BOOLEAN
 - SMALLINT -> SMALLINT
@@ -229,16 +260,16 @@ The Stage 1 type boundary covers common built-ins without exposing GBase JDBC pr
 - unknown, opaque and extension JDBC types -> STRING
 
 DECIMAL precision above Link-Up's limit falls back to STRING rather than silently truncating numeric precision. INTERVAL
-also stays STRING in this stage because the GBase 8s JDBC driver represents intervals with vendor-specific
-`com.gbasedbt.lang.Interval*` classes. Target type generation remains disabled until the dedicated 8s Sink stage.
+also stays STRING because the GBase 8s JDBC driver represents intervals with vendor-specific `com.gbasedbt.lang.Interval*`
+classes. Target DDL type generation remains disabled because this existing-table Sink never auto-creates GBase 8s tables.
 
 The Source supports bounded single-table and multi-table jobs, custom SQL and the shared safe JDBC range partition
-planner. It advertises `BEST_EFFORT` read consistency only. Although GBase 8s provides transactional isolation levels,
-this stage does not claim a coordinated point-in-time snapshot across independent parallel JDBC readers.
+planner. It advertises `BEST_EFFORT` read consistency only and does not claim a coordinated point-in-time snapshot across
+independent parallel JDBC readers.
 
-Out of scope for this stage: JDBC Sink, WritableCatalog, automatic DDL, SQLMODE MySQL/Oracle compatibility expansion,
-CDC/realtime synchronization, logical-log integration, coordinated snapshots, complex ROW/COLLECTION native objects and
-runtime schema evolution.
+Still out of scope: automatic DDL, SQLMODE MySQL/Oracle compatibility expansion, CDC/realtime synchronization,
+logical-log integration, coordinated snapshots, complex ROW/COLLECTION native object modeling and runtime schema
+evolution.
 
 The vendor JDBC driver is not guessed as a Maven dependency by this module. Deployments must provide the official GBase
 8s JDBC driver on the runtime classpath and configure `driver = "com.gbasedbt.jdbc.Driver"` (or an older vendor-provided

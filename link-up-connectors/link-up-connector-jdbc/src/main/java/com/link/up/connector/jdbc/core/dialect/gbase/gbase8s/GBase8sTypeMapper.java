@@ -15,11 +15,12 @@ import java.sql.Types;
 import java.util.Locale;
 
 /**
- * GBase 8s bounded Source type mapper.
+ * GBase 8s read-side type mapper.
  *
  * <p>The mapper covers stable built-in scalar and large-object types. INTERVAL and unknown or
- * extension types use a STRING boundary in Stage 1 instead of leaking driver-specific Java
- * objects into Link-Up. Target DDL type generation remains disabled until the Sink stage.</p>
+ * extension types use a STRING boundary instead of leaking driver-specific Java objects into
+ * Link-Up. Target DDL type generation remains disabled because the current Sink writes only to
+ * pre-created tables.</p>
  */
 public final class GBase8sTypeMapper implements JdbcTypeMapper {
 
@@ -70,7 +71,7 @@ public final class GBase8sTypeMapper implements JdbcTypeMapper {
     @Override
     public String toDatabaseType(Column column) {
         throw new UnsupportedOperationException(
-                "GBase 8s Stage 1 is source-only; target type generation belongs to the Sink stage");
+                "GBase 8s existing-table JDBC Sink does not generate target DDL types");
     }
 
     private static FluxDataType<?> mapType(

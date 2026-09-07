@@ -1,12 +1,15 @@
 package com.link.up.connector.jdbc.catalog.gbase.gbase8s;
 
-import com.link.up.api.table.catalog.Catalog;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.PrimaryKey;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
+import com.link.up.api.table.catalog.WritableCatalog;
 import com.link.up.api.table.catalog.exception.CatalogException;
+import com.link.up.api.table.catalog.exception.DatabaseAlreadyExistsException;
+import com.link.up.api.table.catalog.exception.DatabaseNotFoundException;
+import com.link.up.api.table.catalog.exception.TableAlreadyExistsException;
 import com.link.up.api.table.catalog.exception.TableNotFoundException;
 import com.link.up.connector.jdbc.catalog.JdbcCatalogConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
@@ -16,26 +19,29 @@ import com.link.up.connector.jdbc.core.dialect.gbase.gbase8s.GBase8sTypeMapper;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * Read-only GBase 8s Catalog for bounded/offline Source jobs.
+ * GBase 8s Catalog for bounded/offline Source and existing-table JDBC Sink jobs.
  *
- * <p>GBase 8s JDBC exposes database as catalog and table owner as schema. Stage 1 binds one Catalog
- * instance to the database in the JDBC URL and uses standard {@link DatabaseMetaData} for owner,
- * table, column and primary-key discovery. Cross-database rebinding and writable DDL remain out of
- * scope.</p>
+ * <p>GBase 8s JDBC exposes database as catalog and table owner as schema. The JDBC URL binds this
+ * Catalog to one database. Sink support deliberately implements {@link WritableCatalog} only so
+ * the shared save-mode lifecycle can validate pre-created targets and optionally truncate their
+ * data. Structure-changing DDL, cross-database rebinding and SQLMODE expansion remain outside this
+ * stage.</p>
  */
-public final class GBase8sCatalog implements Catalog {
+public final class GBase8sCatalog implements WritableCatalog {
 
     public static final String TABLE_OPTION_DIALECT = "dialect";
 
@@ -45,6 +51,7 @@ public final class GBase8sCatalog implements Catalog {
     private final JdbcCatalogConfig config;
     private final String defaultDatabase;
     private final String defaultOwner;
+    private final boolean delimitedIdentifiers;
     private final GBase8sTypeMapper typeMapper = new GBase8sTypeMapper();
     private volatile boolean opened;
 
@@ -63,12 +70,15 @@ public final class GBase8sCatalog implements Catalog {
             throw new IllegalArgumentException("非法 GBase 8s JDBC URL：" + config.getUrl());
         }
         if (!hasText(defaultDatabase)) {
-            throw new IllegalArgumentException("GBase 8s Stage 1 必须指定默认 database");
+            throw new IllegalArgumentException("GBase 8s JDBC URL 必须指定默认 database");
         }
         this.catalogName = catalogName.trim();
         this.config = config;
         this.defaultDatabase = defaultDatabase.trim();
         this.defaultOwner = hasText(defaultOwner) ? defaultOwner.trim() : null;
+        this.delimitedIdentifiers = GBase8sJdbcUrl.delimitedIdentifiersEnabled(
+                config.getUrl(),
+                config.getProperties());
     }
 
     @Override
@@ -102,7 +112,7 @@ public final class GBase8sCatalog implements Catalog {
         return Optional.of(defaultDatabase);
     }
 
-    /** Stage 1 keeps one physical JDBC connection bound to one database. */
+    /** One physical JDBC connection remains bound to the database in the URL. */
     @Override
     public List<String> listDatabases() throws CatalogException {
         checkOpened();
@@ -217,6 +227,71 @@ public final class GBase8sCatalog implements Catalog {
         }
     }
 
+    @Override
+    public void createDatabase(
+            String databaseName,
+            boolean ignoreIfExists)
+            throws CatalogException, DatabaseAlreadyExistsException {
+        throw unsupportedSchemaDdl("create database");
+    }
+
+    @Override
+    public void dropDatabase(
+            String databaseName,
+            boolean ignoreIfNotExists)
+            throws CatalogException, DatabaseNotFoundException {
+        throw unsupportedSchemaDdl("drop database");
+    }
+
+    @Override
+    public void createTable(
+            CatalogTable table,
+            boolean ignoreIfExists)
+            throws CatalogException, DatabaseNotFoundException, TableAlreadyExistsException {
+        throw unsupportedSchemaDdl("create table");
+    }
+
+    @Override
+    public void addColumn(
+            TablePath tablePath,
+            Column column)
+            throws CatalogException, TableNotFoundException {
+        throw unsupportedSchemaDdl("add column");
+    }
+
+    @Override
+    public void dropTable(
+            TablePath tablePath,
+            boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        throw unsupportedSchemaDdl("drop table");
+    }
+
+    @Override
+    public void truncateTable(
+            TablePath tablePath,
+            boolean ignoreIfNotExists)
+            throws CatalogException, TableNotFoundException {
+        checkOpened();
+        try (Connection connection = newConnection()) {
+            TablePath normalized = normalizeTablePath(
+                    connection,
+                    tablePath,
+                    !ignoreIfNotExists);
+            if (normalized == null) {
+                return;
+            }
+            String sql = "TRUNCATE TABLE " + quoteTable(normalized);
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.executeUpdate();
+            }
+        } catch (TableNotFoundException e) {
+            throw e;
+        } catch (SQLException e) {
+            throw new CatalogException("清空 GBase 8s 表失败，table=" + tablePath, e);
+        }
+    }
+
     private List<Column> readColumns(
             DatabaseMetaData metadata,
             TablePath tablePath) throws SQLException {
@@ -325,11 +400,34 @@ public final class GBase8sCatalog implements Catalog {
         if (hasText(databaseName)
                 && !defaultDatabase.equalsIgnoreCase(databaseName.trim())) {
             throw new IllegalArgumentException(
-                    "GBase 8s Stage 1 不支持跨 database table_path；当前 JDBC database="
+                    "GBase 8s existing-table JDBC stage 不支持跨 database table_path；当前 JDBC database="
                             + defaultDatabase
                             + "，请求 database="
                             + databaseName);
         }
+    }
+
+    private String quoteTable(TablePath tablePath) {
+        String owner = tablePath.getSchemaName();
+        return hasText(owner)
+                ? quoteIdentifier(owner) + "." + quoteIdentifier(tablePath.getTableName())
+                : quoteIdentifier(tablePath.getTableName());
+    }
+
+    private String quoteIdentifier(String identifier) {
+        if (!hasText(identifier)) {
+            throw new IllegalArgumentException("identifier must not be empty");
+        }
+        String value = identifier.trim();
+        if (delimitedIdentifiers) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        if (!isSimpleIdentifier(value)) {
+            throw new IllegalArgumentException(
+                    "GBase 8s JDBC 默认 DELIMIDENT=n，不支持需要双引号的标识符："
+                            + identifier);
+        }
+        return value.toLowerCase(Locale.ROOT);
     }
 
     private Connection newConnection() throws SQLException {
@@ -353,10 +451,37 @@ public final class GBase8sCatalog implements Catalog {
         }
     }
 
+    private static CatalogException unsupportedSchemaDdl(String operation) {
+        return new CatalogException(
+                "GBase 8s existing-table JDBC Sink does not support "
+                        + operation
+                        + "; pre-create the target database/owner/table and keep schema mutation outside this stage");
+    }
+
     private static boolean isBaseTable(String tableType) {
         return tableType != null
                 && ("TABLE".equalsIgnoreCase(tableType)
                 || "BASE TABLE".equalsIgnoreCase(tableType));
+    }
+
+    private static boolean isSimpleIdentifier(String value) {
+        if (!hasText(value)) {
+            return false;
+        }
+        char first = value.charAt(0);
+        if (!(Character.isLetter(first) || first == '_')) {
+            return false;
+        }
+        for (int i = 1; i < value.length(); i++) {
+            char current = value.charAt(i);
+            if (!(Character.isLetterOrDigit(current)
+                    || current == '_'
+                    || current == '$'
+                    || current == '#')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean hasText(String value) {

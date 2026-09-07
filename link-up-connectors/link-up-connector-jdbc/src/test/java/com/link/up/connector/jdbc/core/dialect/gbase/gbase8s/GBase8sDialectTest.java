@@ -125,10 +125,15 @@ public class GBase8sDialectTest {
     }
 
     @Test
-    public void sourceCatalogIsReadOnlyAndSinkSpecificSemanticsStayDisabled() {
+    public void existingTableSinkUsesInsertAndStillRejectsUpsertAndDdlTypes() {
         GBase8sDialect dialect = dialect(null, null);
         Catalog catalog = dialect.createCatalog(config(baseUrl(), null, null, null));
-        assertFalse(catalog instanceof WritableCatalog);
+        assertTrue(catalog instanceof WritableCatalog);
+        assertEquals(
+                "INSERT INTO gbasedbt.orders (id, name) VALUES (?, ?)",
+                dialect.buildInsertSql(
+                        TablePath.of("testdb", "gbasedbt", "orders"),
+                        Arrays.asList("id", "name")));
         assertFalse(dialect.buildUpsertSql(
                 TablePath.of("testdb", "gbasedbt", "orders"),
                 Arrays.asList("id", "name"),
@@ -138,6 +143,18 @@ public class GBase8sDialectTest {
         assertThrows(
                 UnsupportedOperationException.class,
                 () -> dialect.typeMapper().toDatabaseType(column));
+    }
+
+    @Test
+    public void bulkInsertExtensionRemainsOptIn() {
+        GBase8sDialect dialect = dialect(null, null);
+        assertFalse(dialect.defaultConnectionProperties().containsKey("IFX_USEPUT"));
+
+        Map<String, String> userProperties = new LinkedHashMap<String, String>();
+        userProperties.put("IFX_USEPUT", "1");
+        assertEquals(
+                "1",
+                dialect.resolveConnectionProperties(userProperties).get("IFX_USEPUT"));
     }
 
     @Test
