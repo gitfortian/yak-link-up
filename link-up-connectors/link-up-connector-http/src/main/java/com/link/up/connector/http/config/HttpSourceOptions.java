@@ -8,9 +8,6 @@ import java.util.Map;
 
 /**
  * HTTP Source 配置项。
- *
- * <p>参考 SeaTunnel HTTP Source 参数设计，
- * 并结合 Link-Up 配置体系进行优化。
  */
 public final class HttpSourceOptions {
 

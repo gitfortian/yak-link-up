@@ -9,8 +9,7 @@ import java.util.Map;
 /**
  * Doris Sink 配置项。
  *
- * <p>参考 SeaTunnel Doris Sink 参数设计，
- * 内部通过 Stream Load 将数据批量写入 Doris。
+ * <p>内部通过 Stream Load 将数据批量写入 Doris。
  */
 public final class DorisSinkOptions {
 

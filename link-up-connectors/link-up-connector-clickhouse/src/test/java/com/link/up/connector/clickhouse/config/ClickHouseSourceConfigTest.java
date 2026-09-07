@@ -16,7 +16,7 @@ import static org.junit.Assert.assertTrue;
 public class ClickHouseSourceConfigTest {
 
     @Test
-    public void parsesSingleTableWithSeaTunnelDefaults() {
+    public void parsesSingleTableWithDefaultOptions() {
         Map<String, Object> values = base();
         values.put("table_path", "analytics.orders");
 

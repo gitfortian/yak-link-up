@@ -50,11 +50,6 @@ apidoc
 
 spark-warehouse
 *.flattened-pom.xml
-/seatunnel-ui/package-lock.json
-/seatunnel-ui/node
-/seatunnel-ui/node/*
-/seatunnel-ui/node_modules
-/seatunnel-ui/node_modules/*
 /link-up-flow-it/profile/*
 /deploy/docker/dist/
 /node_modules/.yarn-integrity

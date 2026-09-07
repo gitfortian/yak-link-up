@@ -13,7 +13,7 @@ import static org.junit.Assert.assertTrue;
 public class DorisSourceConfigTest {
 
     @Test
-    public void parsesSingleTableWithSeaTunnelCompatibleDefaults() {
+    public void parsesSingleTableWithDefaultOptions() {
         Map<String, Object> values = base();
         values.put("database", "analytics");
         values.put("table", "orders");

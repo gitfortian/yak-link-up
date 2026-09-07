@@ -4,7 +4,7 @@
 
 ## Native Source
 
-The Source data path follows the Doris native scanner design used by SeaTunnel:
+The Source data path uses Doris's native scanner protocol, reading tablets directly from BE nodes:
 
 ```text
 DorisSource
