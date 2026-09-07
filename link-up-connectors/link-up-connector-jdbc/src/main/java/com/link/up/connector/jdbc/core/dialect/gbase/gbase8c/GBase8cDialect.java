@@ -14,8 +14,10 @@ import com.link.up.connector.jdbc.core.dialect.JdbcTypeMapper;
  * GBase 8c bounded/offline JDBC dialect.
  *
  * <p>The adapter targets the dedicated GBase 8c JDBC protocol and PG-compatible metadata/read
- * semantics. The existing-table Sink stage reuses the portable INSERT/batch path only; UPSERT,
- * structure-changing DDL, CDC and compatibility-mode expansion remain separate stages.</p>
+ * semantics. The JDBC Sink supports portable INSERT/batch writes and safe creation of a missing
+ * target table after resolving the actual A/B/C/PG database compatibility mode. Destructive DDL,
+ * runtime schema evolution, UPSERT/MERGE, CDC and native bulk-loading semantics remain separate
+ * capabilities.</p>
  */
 public final class GBase8cDialect implements JdbcDialect {
 

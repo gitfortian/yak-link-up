@@ -9,7 +9,7 @@ import com.link.up.connector.jdbc.sink.SchemaSaveMode;
 /**
  * JDBC-specific save-mode handler that controls whether copied primary keys are created.
  */
-public final class JdbcSaveModeHandler extends DefaultSaveModeHandler {
+public class JdbcSaveModeHandler extends DefaultSaveModeHandler {
     private final boolean createPrimaryKey;
     private final CatalogTable createTableDefinition;
     private boolean tableCreated;

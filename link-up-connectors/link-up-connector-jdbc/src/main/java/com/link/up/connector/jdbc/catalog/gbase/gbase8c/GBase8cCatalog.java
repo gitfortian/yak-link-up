@@ -30,12 +30,12 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * GBase 8c Catalog for bounded Source and existing-table Sink jobs.
+ * GBase 8c Catalog for bounded Source, JDBC Sink and compatibility-aware automatic targets.
  *
  * <p>Metadata follows the PG-compatible information_schema contract, while the JDBC connection
- * remains bound to one GBase 8c database. Compatibility-sensitive DDL code can explicitly resolve
- * the database-level DBCOMPATIBILITY mode without making ordinary Source/Sink startup depend on
- * that detection. Structure-changing DDL remains blocked in this foundation stage.</p>
+ * remains bound to one GBase 8c database. Missing target tables may be created after the Catalog
+ * resolves the database-level DBCOMPATIBILITY mode. Destructive DDL and runtime schema evolution
+ * remain blocked.</p>
  */
 public final class GBase8cCatalog implements WritableCatalog {
 
@@ -88,6 +88,7 @@ public final class GBase8cCatalog implements WritableCatalog {
     private final String defaultSchema;
     private final GBase8cTypeMapper typeMapper = new GBase8cTypeMapper();
     private volatile boolean opened;
+    private volatile GBase8cCompatibilityMode resolvedCompatibilityMode;
 
     public GBase8cCatalog(
             String catalogName,
@@ -144,19 +145,32 @@ public final class GBase8cCatalog implements WritableCatalog {
     }
 
     /**
-     * Resolves the target database DBCOMPATIBILITY mode for compatibility-sensitive DDL only.
+     * Resolves and caches the target database DBCOMPATIBILITY mode for compatibility-sensitive DDL.
      *
-     * <p>This is deliberately not called from {@link #open()}; existing bounded Source/Sink jobs
-     * therefore remain usable even if a newer GBase 8c release introduces an unrecognized mode.</p>
+     * <p>The mode is immutable for a GBase 8c database after creation, so keeping it for the life of
+     * this Catalog avoids repeated pg_database lookups. This method is still deliberately not called
+     * from {@link #open()} so ordinary existing-table execution does not require mode recognition.</p>
      */
     public GBase8cCompatibilityMode resolveCompatibilityMode() throws CatalogException {
+        GBase8cCompatibilityMode cached = resolvedCompatibilityMode;
+        if (cached != null) {
+            return cached;
+        }
         checkOpened();
-        try (Connection connection = newConnection()) {
-            return GBase8cCompatibilityResolver.resolve(connection);
-        } catch (SQLException e) {
-            throw new CatalogException(
-                    "解析 GBase 8c 数据库兼容模式失败，database=" + defaultDatabase,
-                    e);
+        synchronized (this) {
+            cached = resolvedCompatibilityMode;
+            if (cached != null) {
+                return cached;
+            }
+            try (Connection connection = newConnection()) {
+                cached = GBase8cCompatibilityResolver.resolve(connection);
+                resolvedCompatibilityMode = cached;
+                return cached;
+            } catch (SQLException e) {
+                throw new CatalogException(
+                        "解析 GBase 8c 数据库兼容模式失败，database=" + defaultDatabase,
+                        e);
+            }
         }
     }
 
@@ -272,12 +286,46 @@ public final class GBase8cCatalog implements WritableCatalog {
         throw unsupportedSchemaDdl("drop database");
     }
 
+    /** Creates a missing target table after resolving the actual target database compatibility mode. */
     @Override
     public void createTable(
             CatalogTable table,
             boolean ignoreIfExists)
             throws CatalogException, DatabaseNotFoundException, TableAlreadyExistsException {
-        throw unsupportedSchemaDdl("create table");
+        checkOpened();
+        if (table == null) {
+            throw new IllegalArgumentException("table must not be null");
+        }
+
+        TablePath normalized = normalizeTablePath(table.getTablePath());
+        if (tableExists(normalized)) {
+            if (ignoreIfExists) {
+                return;
+            }
+            throw new TableAlreadyExistsException(catalogName, normalized);
+        }
+
+        GBase8cCompatibilityMode compatibilityMode = resolveCompatibilityMode();
+        CatalogTable ddlTable = table.getTablePath().equals(normalized)
+                ? table
+                : table.withPath(normalized);
+        String sql = new GBase8cCreateTableSqlBuilder(
+                normalized,
+                ddlTable,
+                compatibilityMode)
+                .build();
+
+        try (Connection connection = newConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new CatalogException(
+                    "创建 GBase 8c 目标表失败，table="
+                            + normalized
+                            + ", compatibility="
+                            + compatibilityMode.databaseValue(),
+                    e);
+        }
     }
 
     @Override
@@ -414,9 +462,9 @@ public final class GBase8cCatalog implements WritableCatalog {
 
     private static CatalogException unsupportedSchemaDdl(String operation) {
         return new CatalogException(
-                "GBase 8c existing-table Sink supports target-table DML only; "
+                "GBase 8c automatic-target Sink supports safe CREATE TABLE for missing targets, but "
                         + operation
-                        + " is disabled until compatibility-aware automatic DDL is enabled");
+                        + " remains disabled; destructive DDL and runtime schema evolution stay out of scope");
     }
 
     private static boolean hasText(String value) {

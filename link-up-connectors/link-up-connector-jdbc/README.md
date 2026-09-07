@@ -103,12 +103,101 @@ The shared `gbase/common` layer only carries stable product metadata and family-
 product-specific: URL parsing, identifiers, catalog behavior, type mapping, row conversion, Sink SQL and MPP behavior
 must stay in the concrete product adapter unless completed implementations prove that behavior is genuinely common.
 
-The bounded/offline implementation is staged per product. GBase 8a and GBase 8s now support bounded Source, JDBC Sink and
-safe automatic creation of a missing target table. GBase 8a native/high-speed MPP loading remains a later performance
-stage. GBase 8c keeps its compatibility-sensitive runtime and DDL work separate from the other two products.
+GBase 8c, GBase 8a and GBase 8s now support bounded Source, JDBC Sink and safe automatic creation of a missing target
+table. Each product keeps its own target-type and DDL semantics. GBase 8c resolves the actual database compatibility mode
+before automatic DDL; users do not configure A/B/C/PG manually. GBase 8a native/high-speed MPP loading remains a later
+performance stage.
 
-CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths stay outside
-this family-level contract.
+CDC, automatic distributed-table design, unverified compatibility-mode expansion and product-native bulk-loading paths
+stay outside this family-level contract.
+
+### GBase 8c bounded Source + JDBC Sink + compatibility-aware automatic target creation
+
+GBase 8c is exposed as the first-class `gbase8c` JDBC dialect and uses the dedicated GBase 8c JDBC protocol:
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:gbase8c://gbase8c:5432/app"
+  driver = "com.gbase8c.Driver"
+  dialect = "gbase8c"
+  schema = "public"
+  table_path = "public.orders"
+}
+
+sink {
+  type = "jdbc"
+  url = "jdbc:gbase8c://gbase8c:5432/archive"
+  driver = "com.gbase8c.Driver"
+  dialect = "gbase8c"
+  schema = "landing"
+  table = "orders"
+  schema_save_mode = "CREATE_SCHEMA_WHEN_NOT_EXIST"
+  data_save_mode = "APPEND_DATA"
+}
+```
+
+One GBase 8c JDBC connection stays bound to the database in its URL. SQL uses `schema.table` inside that database. For an
+implicit Sink target, Link-Up keeps only the source table name and resolves database/schema from the Sink connection, so
+source routing metadata cannot leak into the target even when source and target database names happen to match. Explicit
+`schema.table` targets are preserved; an explicit three-part target must repeat the Sink URL database.
+
+When the target table is missing, Link-Up resolves the target database's actual `pg_database.datcompatibility` value and
+recognizes the stable GBase 8c modes `A`, `B`, `C` and `PG`. The mode is detected from the database itself instead of being
+exposed as another user-facing connector option. Unknown/newer modes fail closed for automatic DDL rather than silently
+assuming PostgreSQL semantics. Ordinary existing-table jobs do not query compatibility mode unless a documented
+mode-specific metadata difference needs normalization.
+
+Automatic DDL copies only the relational shape needed by the bounded Sink:
+
+- column names
+- compatibility-aware target types
+- NULL / NOT NULL
+- source primary key only when the shared `create_primary_key` option keeps it
+
+It deliberately does **not** copy source DEFAULT/identity/SERIAL/AUTO_INCREMENT behavior, comments, indexes, foreign
+keys, partitions, storage orientation, replication or hash-distribution policy. The generated baseline contains no
+`DISTRIBUTE BY` or replication clause; Link-Up does not guess a physical MPP distribution key from source metadata.
+
+The compatibility-aware target type baseline keeps stable GBase/PostgreSQL-core scalar types where they round-trip safely:
+
+- TINYINT / SMALLINT -> SMALLINT
+- INT -> INTEGER
+- BIGINT -> BIGINT
+- FLOAT -> REAL
+- DOUBLE -> DOUBLE PRECISION
+- DECIMAL -> NUMERIC(precision, scale)
+- BOOLEAN -> BOOLEAN
+- BYTES -> BYTEA
+- TIME -> TIME
+- TIMESTAMP -> TIMESTAMP
+- B/C/PG DATE -> DATE
+- A-mode DATE -> TIMESTAMP(0) WITHOUT TIME ZONE
+- PG-mode STRING with a safe known length -> VARCHAR(length)
+- A/B/C STRING -> TEXT
+
+A/B/C string targets use `TEXT` because GBase 8c documents PG-mode CHAR/VARCHAR length in characters while the other
+stable compatibility modes count bytes; a cross-database source length is therefore not safely reusable as a target byte
+limit. `TIMESTAMP_TZ` is enabled only for the currently verified PG-mode contract. ARRAY/MAP/ROW and other types without a
+safe automatic target contract fail before DDL execution.
+
+A-mode DATE has a deliberate physical/logical round-trip rule. GBase 8c represents A-mode DATE as
+`TIMESTAMP(0) WITHOUT TIME ZONE`, so JDBC metadata reads that physical column back as TIMESTAMP. GBase 8c Sink validation
+normalizes only the corresponding source-DATE/target-TIMESTAMP pair back to logical DATE for A mode; the generic JDBC
+conversion contract remains unchanged for every other database and mode. This keeps a table created on the first job
+compatible when the same job runs again.
+
+`CREATE_SCHEMA_WHEN_NOT_EXIST` creates a missing table and validates an existing table. `CREATE_OR_ADD_COLUMNS` may also
+create a missing table, but it still cannot mutate an existing target: `ADD COLUMN` remains blocked. `RECREATE_SCHEMA`
+cannot destructively recreate an existing table because `DROP TABLE` remains blocked. CREATE/DROP DATABASE is also
+disabled. The target database/schema must already exist and the JDBC user must have permission to create a table there.
+
+After preparation, row writing still reuses the shared JDBC path: parameterized `INSERT`, configured batch size,
+`PreparedStatement.addBatch()` / `executeBatch()`, task-local transaction, commit/rollback, savepoint retry and dirty-data
+handling. UPSERT/MERGE, runtime schema evolution, CDC and native bulk-loading remain out of scope.
+
+The vendor GBase 8c JDBC driver is not guessed as a Maven dependency by this module. Deployments must provide the official
+driver on the runtime classpath and configure `driver = "com.gbase8c.Driver"`.
 
 ### GBase 8a bounded Source + JDBC Sink + safe automatic target creation
 

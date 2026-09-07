@@ -3,6 +3,7 @@ package com.link.up.connector.jdbc.sink.savemode;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.SchemaCompatibilityReport;
 import com.link.up.api.table.catalog.TablePath;
+import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.catalog.WritableCatalog;
 import com.link.up.api.table.catalog.exception.TableNotFoundException;
 import com.link.up.connector.jdbc.sink.DataSaveMode;
@@ -85,9 +86,22 @@ public class DefaultSaveModeHandler implements SaveModeHandler {
         }
     }
 
-    private SchemaCompatibilityReport validateExistingSchema(boolean allowMissingColumns) {
-        SchemaCompatibilityReport report = SchemaCompatibilityReport.compare(
-                table.getTableSchema(), catalog.getTable(tablePath).getTableSchema());
+    /**
+     * Validates an already-existing target table.
+     *
+     * <p>Database-specific handlers may normalize the physical target schema through
+     * {@link #normalizeTargetSchemaForValidation(TableSchema, TableSchema)} before the generic
+     * compatibility report runs. The default implementation returns the target schema unchanged.
+     * This keeps product-specific physical/logical type quirks out of the global type-conversion
+     * contract.</p>
+     */
+    protected SchemaCompatibilityReport validateExistingSchema(boolean allowMissingColumns) {
+        TableSchema sourceSchema = table.getTableSchema();
+        TableSchema targetSchema = catalog.getTable(tablePath).getTableSchema();
+        TableSchema normalizedTarget =
+                normalizeTargetSchemaForValidation(sourceSchema, targetSchema);
+        SchemaCompatibilityReport report =
+                SchemaCompatibilityReport.compare(sourceSchema, normalizedTarget);
         if (!report.getIncompatibleColumns().isEmpty()
                 || (!allowMissingColumns && !report.getMissingTargetColumns().isEmpty())) {
             throw new IllegalArgumentException("Incompatible target schema: "
@@ -95,6 +109,13 @@ public class DefaultSaveModeHandler implements SaveModeHandler {
                     + report.getMissingTargetColumns());
         }
         return report;
+    }
+
+    /** Hook for database-specific logical/physical schema normalization during validation only. */
+    protected TableSchema normalizeTargetSchemaForValidation(
+            TableSchema sourceSchema,
+            TableSchema targetSchema) {
+        return targetSchema;
     }
 
     @Override

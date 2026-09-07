@@ -8,66 +8,74 @@ import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.type.BasicType;
 import com.link.up.connector.jdbc.config.JdbcConnectionConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
-import com.link.up.connector.jdbc.core.dialect.gbase.gbase8c.GBase8cDialect;
+import com.link.up.connector.jdbc.core.dialect.gbase.gbase8c.GBase8cCompatibilityMode;
 import org.junit.Test;
 
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class GBase8cSinkSupportTest {
 
     @Test
-    public void sourceDatabaseAndSchemaDoNotLeakIntoGBase8cTarget() {
-        TablePath target =
-                GBase8cSinkSupport.resolveTargetPath(
-                        config("target_db", "landing", DatabaseIdentifier.GBASE8C),
-                        TablePath.of("source_db", "source_schema", "orders"));
+    public void implicitTargetDropsSourceDatabaseAndSchemaMetadata() {
+        TablePath target = GBase8cSinkSupport.resolveImplicitTargetPath(
+                config("target_db", "landing", DatabaseIdentifier.GBASE8C),
+                TablePath.of("source_db", "source_schema", "orders"));
 
-        assertEquals(
-                TablePath.of("target_db", "landing", "orders"),
-                target);
+        assertEquals(TablePath.of("target_db", "landing", "orders"), target);
     }
 
     @Test
-    public void foreignSourceSchemaFallsBackToPublicWithoutTargetSchema() {
-        TablePath target =
-                GBase8cSinkSupport.resolveTargetPath(
-                        config("target_db", null, DatabaseIdentifier.GBASE8C),
-                        TablePath.of("source_db", "source_schema", "orders"));
+    public void implicitTargetDoesNotLeakSchemaEvenWhenDatabaseNamesCoincide() {
+        TablePath target = GBase8cSinkSupport.resolveImplicitTargetPath(
+                config("target_db", "landing", DatabaseIdentifier.GBASE8C),
+                TablePath.of("target_db", "source_schema", "orders"));
 
-        assertEquals(
-                TablePath.of("target_db", "public", "orders"),
-                target);
+        assertEquals(TablePath.of("target_db", "landing", "orders"), target);
+    }
+
+    @Test
+    public void implicitTargetFallsBackToPublicWithoutConfiguredSchema() {
+        TablePath target = GBase8cSinkSupport.resolveImplicitTargetPath(
+                config("target_db", null, DatabaseIdentifier.GBASE8C),
+                TablePath.of("source_db", "source_schema", "orders"));
+
+        assertEquals(TablePath.of("target_db", "public", "orders"), target);
     }
 
     @Test
     public void explicitSchemaTableMappingWinsOverConfiguredDefaultSchema() {
-        TablePath target =
-                GBase8cSinkSupport.resolveTargetPath(
-                        config("target_db", "public", DatabaseIdentifier.GBASE8C),
-                        TablePath.of(null, "archive", "orders"));
+        TablePath target = GBase8cSinkSupport.resolveExplicitTargetPath(
+                config("target_db", "public", DatabaseIdentifier.GBASE8C),
+                TablePath.of(null, "archive", "orders"));
 
-        assertEquals(
-                TablePath.of("target_db", "archive", "orders"),
-                target);
+        assertEquals(TablePath.of("target_db", "archive", "orders"), target);
     }
 
     @Test
-    public void schemaCanBePreservedWhenPathAlreadyTargetsSameDatabase() {
-        TablePath target =
-                GBase8cSinkSupport.resolveTargetPath(
-                        config("target_db", "public", DatabaseIdentifier.GBASE8C),
-                        TablePath.of("target_db", "sales", "orders"));
+    public void explicitSameDatabaseSchemaMappingIsAccepted() {
+        TablePath target = GBase8cSinkSupport.resolveExplicitTargetPath(
+                config("target_db", "public", DatabaseIdentifier.GBASE8C),
+                TablePath.of("target_db", "sales", "orders"));
 
-        assertEquals(
-                TablePath.of("target_db", "sales", "orders"),
-                target);
+        assertEquals(TablePath.of("target_db", "sales", "orders"), target);
+    }
+
+    @Test
+    public void explicitCrossDatabaseMappingIsRejected() {
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> GBase8cSinkSupport.resolveExplicitTargetPath(
+                        config("target_db", "public", DatabaseIdentifier.GBASE8C),
+                        TablePath.of("other_db", "sales", "orders")));
+
+        assertTrue(error.getMessage().contains("must match Sink JDBC URL database"));
     }
 
     @Test
@@ -80,26 +88,37 @@ public class GBase8cSinkSupportTest {
     }
 
     @Test
-    public void existingTableSinkDoesNotGenerateAutomaticCreateTableSql() {
+    public void automaticCreatePreviewUsesResolvedModeAndTargetSchema() {
         JdbcConnectionConfig config =
-                config("target_db", "public", DatabaseIdentifier.GBASE8C);
+                config("target_db", "landing", DatabaseIdentifier.GBASE8C);
+        TablePath targetPath = GBase8cSinkSupport.resolveImplicitTargetPath(
+                config,
+                table().getTablePath());
+        CatalogTable target = table().withPath(targetPath);
 
-        assertNull(
-                JdbcCreateTableSqlResolver.resolve(
-                        new GBase8cDialect(config),
-                        config,
-                        table()));
+        String sql = GBase8cSinkSupport.resolveCreateTableSql(
+                config,
+                target,
+                GBase8cCompatibilityMode.A);
+
+        assertTrue(sql.startsWith("CREATE TABLE \"landing\".\"orders\" ("));
+        assertTrue(sql.contains("\"id\" BIGINT NOT NULL"));
+        assertTrue(sql.contains(
+                "\"business_date\" TIMESTAMP(0) WITHOUT TIME ZONE NULL"));
+        assertFalse(sql.contains("source_db"));
+        assertFalse(sql.contains("source_schema"));
     }
 
     private static CatalogTable table() {
-        TableSchema schema =
-                TableSchema.builder()
-                        .columns(
-                                Collections.singletonList(
-                                        Column.builder("id", BasicType.LONG_TYPE)
-                                                .nullable(false)
-                                                .build()))
-                        .build();
+        TableSchema schema = TableSchema.builder()
+                .columns(Arrays.asList(
+                        Column.builder("id", BasicType.LONG_TYPE)
+                                .nullable(false)
+                                .build(),
+                        Column.builder("business_date", BasicType.DATE_TYPE)
+                                .nullable(true)
+                                .build()))
+                .build();
 
         return CatalogTable.builder(
                         TablePath.of("source_db", "source_schema", "orders"),

@@ -5,9 +5,11 @@ import com.link.up.api.sink.SinkPrepareContext;
 import com.link.up.api.sink.SinkPreparer;
 import com.link.up.api.sink.TableDdl;
 import com.link.up.api.table.catalog.*;
+import com.link.up.connector.jdbc.catalog.gbase.gbase8c.GBase8cCatalog;
 import com.link.up.connector.jdbc.config.JdbcSinkConfig;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialect;
 import com.link.up.connector.jdbc.core.dialect.JdbcDialectLoader;
+import com.link.up.connector.jdbc.sink.savemode.GBase8cJdbcSaveModeHandler;
 import com.link.up.connector.jdbc.sink.savemode.JdbcSaveModeHandler;
 
 import java.util.ArrayList;
@@ -51,12 +53,7 @@ final class JdbcSinkPreparer implements SinkPreparer {
                 if (config.isUpsert() && !dialect.buildUpsertSql(target.getTablePath(), columnNames(target), primaryKeys).isPresent())
                     throw new IllegalArgumentException("Dialect does not support UPSERT: " + dialect.name());
 
-                JdbcSaveModeHandler handler = new JdbcSaveModeHandler(
-                        config.getSchemaSaveMode(),
-                        config.getDataSaveMode(),
-                        writableCatalog,
-                        target,
-                        config.isCreatePrimaryKey());
+                JdbcSaveModeHandler handler = createSaveModeHandler(writableCatalog, target);
 
                 boolean targetExistedBefore;
                 long startedAtNanos;
@@ -87,7 +84,7 @@ final class JdbcSinkPreparer implements SinkPreparer {
                         ddlTargetPath == null
                                 ? target.getTablePath().toString()
                                 : ddlTargetPath.toString(),
-                        resolveCreateTableSql(createDefinition),
+                        resolveCreateTableSql(createDefinition, handler),
                         executed,
                         executed ? TableDdl.STATUS_SUCCEEDED : TableDdl.STATUS_SKIPPED,
                         reason,
@@ -105,8 +102,50 @@ final class JdbcSinkPreparer implements SinkPreparer {
         }
     }
 
+    private JdbcSaveModeHandler createSaveModeHandler(
+            WritableCatalog writableCatalog,
+            CatalogTable target) {
+        if (GBase8cSinkSupport.accepts(config.getConnectionConfig())) {
+            if (!(writableCatalog instanceof GBase8cCatalog)) {
+                throw new IllegalStateException(
+                        "GBase 8c dialect must provide GBase8cCatalog for compatibility-aware DDL");
+            }
+            GBase8cCatalog gbase8cCatalog = (GBase8cCatalog) writableCatalog;
+            return new GBase8cJdbcSaveModeHandler(
+                    config.getSchemaSaveMode(),
+                    config.getDataSaveMode(),
+                    writableCatalog,
+                    target,
+                    config.isCreatePrimaryKey(),
+                    gbase8cCatalog::resolveCompatibilityMode);
+        }
+        return new JdbcSaveModeHandler(
+                config.getSchemaSaveMode(),
+                config.getDataSaveMode(),
+                writableCatalog,
+                target,
+                config.isCreatePrimaryKey());
+    }
+
     private CatalogTable resolveTargetTable(CatalogTable source) {
         String path = config.resolveTargetTablePath(source.getTablePath());
+
+        if (GBase8cSinkSupport.accepts(config.getConnectionConfig())) {
+            TablePath targetPath;
+            if (path == null) {
+                targetPath = GBase8cSinkSupport.resolveImplicitTargetPath(
+                        config.getConnectionConfig(),
+                        source.getTablePath());
+            } else {
+                TablePath explicit = dialect.parseTablePath(path);
+                targetPath = GBase8cSinkSupport.resolveExplicitTargetPath(
+                        config.getConnectionConfig(),
+                        explicit);
+            }
+            return source.getTablePath().equals(targetPath)
+                    ? source
+                    : source.withPath(targetPath);
+        }
 
         if (GBase8sSinkSupport.accepts(config.getConnectionConfig())) {
             TablePath targetPath;
@@ -180,7 +219,9 @@ final class JdbcSinkPreparer implements SinkPreparer {
                 config.getConnectionConfig(), tablePath);
     }
 
-    private String resolveCreateTableSql(CatalogTable table) {
+    private String resolveCreateTableSql(
+            CatalogTable table,
+            JdbcSaveModeHandler handler) {
         if (DuckDbSinkSupport.accepts(config.getConnectionConfig())) {
             return DuckDbSinkSupport.resolveCreateTableSql(
                     config.getConnectionConfig(), table);
@@ -205,7 +246,20 @@ final class JdbcSinkPreparer implements SinkPreparer {
             return null;
         }
         if (GBase8cSinkSupport.accepts(config.getConnectionConfig())) {
-            return null;
+            if (!(handler instanceof GBase8cJdbcSaveModeHandler)) {
+                throw new IllegalStateException(
+                        "GBase 8c DDL preview requires GBase8cJdbcSaveModeHandler");
+            }
+            GBase8cJdbcSaveModeHandler gbase8cHandler =
+                    (GBase8cJdbcSaveModeHandler) handler;
+            if (gbase8cHandler.getResolvedCompatibilityMode() == null) {
+                // Existing compatible targets do not need compatibility detection or CREATE SQL.
+                return null;
+            }
+            return GBase8cSinkSupport.resolveCreateTableSql(
+                    config.getConnectionConfig(),
+                    table,
+                    gbase8cHandler.getResolvedCompatibilityMode());
         }
         if (GBase8aSinkSupport.accepts(config.getConnectionConfig())) {
             return GBase8aSinkSupport.resolveCreateTableSql(
