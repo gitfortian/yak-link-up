@@ -311,10 +311,10 @@ S3 逻辑通过 `FileStorage` 接口的内存桩(stub)测试,不依赖真实 AWS
 
 ## 12. 交付清单
 
-1. 根 POM 增加 `<aws-sdk.version>` 属性与 dependencyManagement 条目(遵循版本统一管理)。
-2. 新模块 `link-up-connector-file` + 注册进 `link-up-connectors/pom.xml`。
-3. `link-up-launcher`、`link-up-dist` 依赖清单加入新模块(发行包必须单独验证,拆 Maven 模块不等于 runtime 可用)。
-4. 实现顺序:`config` → `internal`(local 先行,s3 随后)→ `schema` → `converter` → `source` 链路 → SPI 注册。
+1. 根 POM 增加 `<aws-sdk.version>`、`<jsch.version>` 属性与 dependencyManagement 条目(遵循版本统一管理)。
+2. 四个模块:`file-base`、`file-local`、`file-s3`、`file-sftp` + 注册进 `link-up-connectors/pom.xml`。
+3. `link-up-launcher`、`link-up-dist` 依赖清单加入三个叶模块(发行包必须单独验证,拆 Maven 模块不等于 runtime 可用)。
+4. 实现顺序:base(config → internal → schema → converter → source 链路)→ 三个叶模块(存储 + 工厂 + SPI)。
 5. 更新 `CONNECTOR_ADAPTATION.md` 增加 File Source 章节;`README.md` 模块表补充。
 
 ## 13. Stage 2 展望(不进入当前抽象)
