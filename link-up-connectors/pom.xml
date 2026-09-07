@@ -24,6 +24,8 @@
         <module>link-up-connector-elasticsearch7</module>
         <module>link-up-connector-elasticsearch8</module>
         <module>link-up-connector-mongodb</module>
+        <module>link-up-connector-datagen</module>
+        <module>link-up-connector-print</module>
     </modules>
 
 </project>

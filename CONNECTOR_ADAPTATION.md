@@ -83,3 +83,19 @@ DB2 类型适配以数据正确性优先：`DECIMAL` 最大 precision 为 31，�
 JDBC Offline Connector 默认只负责全量读取、分片读取和批量写入。
 
 CDC、Binlog/WAL、Oracle LogMiner/SCN、SQL Server CDC/Change Tracking、OceanBase Binlog/LogProxy/CLog、DB2 CDC/LSN、Replication Slot、流式 Checkpoint、XA / Exactly Once 等能力应作为独立 Stage 设计，不直接塞进离线 JDBC 方言。这样新增达梦等数据库时，只需要实现数据库差异，而不需要重复执行框架。
+
+## 测试用 Connector:DataGen Source 与 Print Sink
+
+`link-up-connector-datagen`（identifier `datagen`）与 `link-up-connector-print`（identifier `print`）是一对零外部依赖的测试 Connector，构成 source → sink 的完整参考链路，设计规范见 `DATA_GEN_SOURCE_DESIGN.md` 与 `PRINT_SINK_DESIGN.md`。
+
+DataGen Source：
+
+- 按 schema 在内存中生成有界数据，生成为纯函数 `f(config, 全局行号) -> FluxRow`；同一 `seed` 完全复现，`rows` 显式预置数据用于逐字段断言。
+- 生成规则内嵌列定义（min/max、length、values、sequence_start 四类提示，冲突即报错），`row_count` 是全局总行数，由 `split_count` 均分为行区间 split。
+- 不声明任何 Capability：schema 是显式契约而非发现，split 是合成行区间而非数据分区；`discoverTableSchemas` 零 IO，validate/explain 语义下均可用。
+
+Print Sink：
+
+- 每行数据以固定格式写入 INFO 日志（任务日志文件可查），schema 行每数据集只打一次；`PrintRowFormatter` 是纯函数，可直接对输出字符串做单元断言。
+- Preparer 显式留空（无目标端 DDL、无连接校验），commit/abort 为默认 no-op，`CommitScope.TASK_LOCAL`；它是无事务 Sink 的参考实现。
+- 行号按 Writer 从 1 计数，跨 Writer 不构成全序，断言用行集合比较。

@@ -195,7 +195,7 @@ FAILED Attempt
 | --- | --- |
 | `link-up-api` | Connector 契约、Capability、Structured Error |
 | `link-up-framework` | Planning、JobGraph、ExecutionGraph、本地执行运行时 |
-| `link-up-connectors` | JDBC / HTTP / Doris 等实现 |
+| `link-up-connectors` | JDBC / HTTP / Doris / File 等实现，含 datagen / print 测试 Connector |
 | `link-up-server` | Worker 控制面、REST、状态持久化、Attempt/Retry、Event Journal |
 | `link-up-launcher` | 本地命令行组合入口 |
 | `link-up-dist` | 分发包 |
