@@ -14,7 +14,7 @@
     <version>1.0.0</version>
 
     <properties>
-        <!-- Matches the mature SeaTunnel ClickHouse connector and ClickHouse Java 8 documentation. -->
+        <!-- ClickHouse Java client line compatible with Java 8. -->
         <clickhouse.version>0.3.2-patch11</clickhouse.version>
     </properties>
 

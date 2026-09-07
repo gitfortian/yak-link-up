@@ -7,7 +7,7 @@ import com.link.up.api.connector.schema.ConnectorOptionScope;
 import java.util.List;
 import java.util.Map;
 
-/** ClickHouse bounded Source options, aligned with SeaTunnel where practical. */
+/** ClickHouse bounded Source options. */
 public final class ClickHouseSourceOptions {
 
     private ClickHouseSourceOptions() {

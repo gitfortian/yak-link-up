@@ -6,7 +6,7 @@ The connector keeps ClickHouse-specific planning and write semantics inside the 
 
 ## Source — Stage 1
 
-The bounded Source follows the mature SeaTunnel read model:
+The bounded Source keeps split planning at the physical-part level, which is the unit ClickHouse itself uses for scans:
 
 ```text
 ClickHouseSource

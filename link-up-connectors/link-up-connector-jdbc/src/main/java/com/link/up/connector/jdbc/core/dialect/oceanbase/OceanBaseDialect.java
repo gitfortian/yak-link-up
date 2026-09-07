@@ -464,8 +464,8 @@ public final class OceanBaseDialect
 
         if (mode.isMySql()) {
             /*
-             * OceanBase's MySQL-compatible JDBC path follows the MySQL
-             * streaming convention used by SeaTunnel's OceanBase dialect.
+             * MySQL 流式协议要求 Integer.MIN_VALUE 才能启用行级流式读取,
+             * 否则驱动会把整个结果集缓冲在客户端内存。
              */
             statement.setFetchSize(
                     Integer.MIN_VALUE);

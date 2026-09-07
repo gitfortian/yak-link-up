@@ -18,7 +18,7 @@ public class MultiTableCommonOptions {
                                     + "CONTINUE_OTHER_TABLES isolates failed tables and keeps healthy tables running when the error can be attributed to a single table.");
 
     public static final Option<List<String>> MULTI_TABLE_INITIAL_FAILED_TABLES =
-            Options.key("seatunnel.multi_table.initial_failed_tables")
+            Options.key("multi_table.initial_failed_tables")
                     .listType()
                     .noDefaultValue()
                     .withDescription(
