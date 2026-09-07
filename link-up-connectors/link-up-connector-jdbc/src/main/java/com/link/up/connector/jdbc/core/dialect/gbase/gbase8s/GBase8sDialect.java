@@ -15,10 +15,11 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * GBase 8s bounded/offline JDBC Source dialect.
+ * GBase 8s bounded/offline JDBC dialect.
  *
- * <p>Stage 1 targets the native GBase 8s JDBC protocol and normal SQL mode. Sink, schema-changing
- * DDL, SQLMODE compatibility expansion, CDC and realtime semantics remain separate stages.</p>
+ * <p>The current stages cover bounded Source plus an existing-table INSERT/batch Sink on the
+ * native GBase 8s JDBC protocol and normal SQL mode. Automatic DDL, MERGE/UPSERT abstraction,
+ * SQLMODE compatibility expansion, CDC and realtime semantics remain separate stages.</p>
  */
 public final class GBase8sDialect implements JdbcDialect {
 
@@ -38,7 +39,7 @@ public final class GBase8sDialect implements JdbcDialect {
 
         String database = GBase8sJdbcUrl.databaseName(connectionConfig.getUrl());
         if (!JdbcDialect.hasText(database)) {
-            throw new IllegalArgumentException("GBase 8s Stage 1 JDBC URL 必须指定 database");
+            throw new IllegalArgumentException("GBase 8s JDBC URL 必须指定 database");
         }
         String server = GBase8sJdbcUrl.serverName(
                 connectionConfig.getUrl(),
@@ -95,7 +96,7 @@ public final class GBase8sDialect implements JdbcDialect {
         return new GBase8sJdbcRowConverter();
     }
 
-    /** GBase 8s Stage 1 accepts table, owner.table, or currentDatabase.owner.table. */
+    /** GBase 8s accepts table, owner.table, or currentDatabase.owner.table. */
     @Override
     public TablePath parseTablePath(String tablePath) {
         if (!JdbcDialect.hasText(tablePath)) {
@@ -235,7 +236,7 @@ public final class GBase8sDialect implements JdbcDialect {
         if (!JdbcDialect.hasText(requestedDatabase)
                 || !databaseName.equalsIgnoreCase(requestedDatabase.trim())) {
             throw new IllegalArgumentException(
-                    "GBase 8s Stage 1 不支持跨 database table_path；当前 JDBC database="
+                    "GBase 8s existing-table JDBC stage 不支持跨 database table_path；当前 JDBC database="
                             + databaseName
                             + "，请求 database="
                             + requestedDatabase);

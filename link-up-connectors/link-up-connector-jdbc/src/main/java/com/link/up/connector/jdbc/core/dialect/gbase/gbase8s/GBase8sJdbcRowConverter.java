@@ -3,7 +3,7 @@ package com.link.up.connector.jdbc.core.dialect.gbase.gbase8s;
 import com.link.up.connector.jdbc.core.converter.AbstractJdbcRowConverter;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
 
-/** GBase 8s bounded Source row converter. */
+/** GBase 8s bounded/offline JDBC row converter. */
 public final class GBase8sJdbcRowConverter extends AbstractJdbcRowConverter {
 
     @Override
