@@ -83,10 +83,15 @@ public class GBase8aDialectTest {
     }
 
     @Test
-    public void sourceCatalogIsReadOnlyAndSinkSemanticsStayDisabled() {
+    public void existingTableSinkUsesPortableInsertAndStillRejectsUpsert() {
         GBase8aDialect dialect = dialect();
         Catalog catalog = dialect.createCatalog(config(baseUrl(), null, null));
-        assertFalse(catalog instanceof WritableCatalog);
+        assertTrue(catalog instanceof WritableCatalog);
+        assertEquals(
+                "INSERT INTO `app`.`orders` (`id`, `name`) VALUES (?, ?)",
+                dialect.buildInsertSql(
+                        TablePath.of("app", "orders"),
+                        Arrays.asList("id", "name")));
         assertFalse(dialect.buildUpsertSql(
                 TablePath.of("app", "orders"),
                 Arrays.asList("id", "name"),
@@ -99,10 +104,11 @@ public class GBase8aDialectTest {
     }
 
     @Test
-    public void sourceDefaultsRemoveTinyintAndYearAmbiguity() {
+    public void dialectDefaultsRemoveTypeAmbiguityAndEnableBatchRewrite() {
         Map<String, String> properties = dialect().defaultConnectionProperties();
         assertEquals("false", properties.get("tinyInt1isBit"));
         assertEquals("false", properties.get("yearIsDateType"));
+        assertEquals("true", properties.get("rewriteBatchedStatements"));
     }
 
     @Test
