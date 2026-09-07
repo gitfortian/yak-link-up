@@ -99,20 +99,54 @@ GBase is modeled as a database family, not as one generic JDBC dialect. The stab
 `gbase8a` and `gbase8s`. A generic `gbase` dialect is intentionally not defined because the three products use different
 JDBC protocols and database semantics.
 
-The family scaffold only provides stable product metadata and family-level helpers. It deliberately does **not** register
-`JdbcDialectFactory` implementations yet, so these identifiers do not advertise runtime support before their concrete
-URL, driver, catalog, type-mapping and SQL behavior is implemented and tested.
+The shared `gbase/common` layer only carries stable product metadata and family-level helpers. Runtime dialects remain
+product-specific: URL parsing, identifiers, catalog behavior, type mapping, row conversion, Sink SQL and MPP behavior
+must stay in the concrete product adapter unless completed implementations prove that behavior is genuinely common.
 
-Shared GBase code must remain product-neutral. Driver names, JDBC URL parsing, identifier rules, catalog behavior, type
-mapping, row conversion, INSERT/UPSERT SQL and distribution/MPP behavior belong to the concrete product adapter unless at
-least two completed adapters prove the behavior is genuinely common. The planned bounded/offline implementation order is:
+The planned bounded/offline implementation order is:
 
 1. GBase 8c Source, then existing-table Sink.
 2. GBase 8a Source, then existing-table JDBC Sink; native/high-speed MPP loading is a later stage.
 3. GBase 8s Source, then existing-table Sink.
 
-CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths are outside
-this scaffold.
+CDC, compatibility-mode expansion, automatic distributed-table design and product-native bulk-loading paths stay outside
+this family-level contract.
+
+### GBase 8a bounded Source
+
+GBase 8a is exposed as the first-class `gbase8a` JDBC dialect. Stage 1 uses the vendor JDBC protocol and driver:
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:gbase://gbase8a:5258/app"
+  driver = "com.gbase.jdbc.Driver"
+  dialect = "gbase8a"
+  table_path = "app.orders"
+}
+```
+
+GBase 8a uses `database.table` semantics with no separate schema layer in this stage. The Source owns a dedicated
+read-only Catalog built on standard JDBC `DatabaseMetaData` for database, table, column and primary-key discovery instead
+of borrowing MySQL DDL behavior. Table identifiers use backtick quoting, and both single-table and multi-table bounded
+jobs continue through the shared JDBC Source runtime.
+
+The read-side type contract covers common numeric, string/text, binary/BLOB, DATE, TIME, DATETIME and TIMESTAMP types.
+DATETIME/TIMESTAMP map to the Link-Up `TIMESTAMP` boundary. DECIMAL values above Link-Up's precision limit fall back to
+STRING instead of silently losing precision. Unknown/extension JDBC types also fall back to STRING for metadata/read
+usability. No target database type generation is exposed in this Source-only stage.
+
+GBase JDBC uses `Integer.MIN_VALUE` as the streaming-result fetch-size sentinel. A positive Link-Up `fetch_size` therefore
+selects that vendor streaming mode rather than passing the positive value through directly, keeping large bounded reads
+from relying on the driver's default full-result buffering behavior. `tinyInt1isBit=false` and `yearIsDateType=false` are
+safe dialect defaults; explicit user `properties` still override dialect defaults.
+
+Stage 1 advertises `BEST_EFFORT` read consistency only. It does not claim one MPP-wide snapshot across parallel JDBC
+readers. Sink, WritableCatalog, CREATE/ALTER/DROP DDL, UPSERT, POC/native high-speed loading, VC/topology management, CDC,
+streaming checkpoints and runtime schema evolution remain separate follow-up stages.
+
+The vendor GBase JDBC driver is not guessed as a Maven dependency by this module. Deployments must provide the official
+GBase 8a JDBC driver on the runtime classpath and configure `driver = "com.gbase.jdbc.Driver"`.
 
 ## SAP HANA
 
