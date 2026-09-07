@@ -9,11 +9,11 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
 /**
- * GBase 8c type mapper for bounded Source and existing-table Sink jobs.
+ * GBase 8c type mapper for bounded Source/Sink jobs.
  *
- * <p>The adapter reuses the mature PostgreSQL-compatible read-side type contract. The current Sink
- * writes only to pre-created tables, so target DDL type generation stays disabled until a later
- * GBase 8c table-creation stage models distribution and compatibility-mode semantics.</p>
+ * <p>The adapter keeps PostgreSQL-compatible metadata mapping for reads. Target DDL mapping requires
+ * an explicitly resolved {@link GBase8cCompatibilityMode}; the mode-less JdbcTypeMapper method
+ * remains blocked so callers cannot accidentally assume PG semantics.</p>
  */
 public final class GBase8cTypeMapper implements JdbcTypeMapper {
 
@@ -32,6 +32,14 @@ public final class GBase8cTypeMapper implements JdbcTypeMapper {
     @Override
     public String toDatabaseType(Column column) {
         throw new UnsupportedOperationException(
-                "GBase 8c existing-table Sink does not generate target DDL types");
+                "GBase 8c target DDL requires a resolved compatibility mode; "
+                        + "use toDatabaseType(column, compatibilityMode)");
+    }
+
+    public String toDatabaseType(
+            Column column,
+            GBase8cCompatibilityMode compatibilityMode) {
+        return new GBase8cTargetTypeMapper(compatibilityMode)
+                .toDatabaseType(column);
     }
 }

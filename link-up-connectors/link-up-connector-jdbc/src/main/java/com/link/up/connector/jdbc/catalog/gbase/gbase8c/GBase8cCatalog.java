@@ -13,6 +13,8 @@ import com.link.up.api.table.catalog.exception.TableAlreadyExistsException;
 import com.link.up.api.table.catalog.exception.TableNotFoundException;
 import com.link.up.connector.jdbc.catalog.JdbcCatalogConfig;
 import com.link.up.connector.jdbc.core.dialect.DatabaseIdentifier;
+import com.link.up.connector.jdbc.core.dialect.gbase.gbase8c.GBase8cCompatibilityMode;
+import com.link.up.connector.jdbc.core.dialect.gbase.gbase8c.GBase8cCompatibilityResolver;
 import com.link.up.connector.jdbc.core.dialect.gbase.gbase8c.GBase8cJdbcUrl;
 import com.link.up.connector.jdbc.core.dialect.gbase.gbase8c.GBase8cTypeMapper;
 
@@ -31,9 +33,9 @@ import java.util.Optional;
  * GBase 8c Catalog for bounded Source and existing-table Sink jobs.
  *
  * <p>Metadata follows the PG-compatible information_schema contract, while the JDBC connection
- * remains bound to one GBase 8c database. Sink preparation may validate and truncate an existing
- * target table, but all structure-changing DDL stays blocked until GBase 8c distribution and
- * compatibility-mode semantics are modeled explicitly.</p>
+ * remains bound to one GBase 8c database. Compatibility-sensitive DDL code can explicitly resolve
+ * the database-level DBCOMPATIBILITY mode without making ordinary Source/Sink startup depend on
+ * that detection. Structure-changing DDL remains blocked in this foundation stage.</p>
  */
 public final class GBase8cCatalog implements WritableCatalog {
 
@@ -139,6 +141,23 @@ public final class GBase8cCatalog implements WritableCatalog {
     @Override
     public Optional<String> getDefaultDatabase() {
         return Optional.of(defaultDatabase);
+    }
+
+    /**
+     * Resolves the target database DBCOMPATIBILITY mode for compatibility-sensitive DDL only.
+     *
+     * <p>This is deliberately not called from {@link #open()}; existing bounded Source/Sink jobs
+     * therefore remain usable even if a newer GBase 8c release introduces an unrecognized mode.</p>
+     */
+    public GBase8cCompatibilityMode resolveCompatibilityMode() throws CatalogException {
+        checkOpened();
+        try (Connection connection = newConnection()) {
+            return GBase8cCompatibilityResolver.resolve(connection);
+        } catch (SQLException e) {
+            throw new CatalogException(
+                    "解析 GBase 8c 数据库兼容模式失败，database=" + defaultDatabase,
+                    e);
+        }
     }
 
     @Override
@@ -397,7 +416,7 @@ public final class GBase8cCatalog implements WritableCatalog {
         return new CatalogException(
                 "GBase 8c existing-table Sink supports target-table DML only; "
                         + operation
-                        + " is disabled until distribution and compatibility-mode DDL is modeled");
+                        + " is disabled until compatibility-aware automatic DDL is enabled");
     }
 
     private static boolean hasText(String value) {
