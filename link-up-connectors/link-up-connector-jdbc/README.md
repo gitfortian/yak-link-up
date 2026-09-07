@@ -178,6 +178,72 @@ For large bounded reads, a positive Link-Up `fetch_size` selects the GBase JDBC 
 The vendor GBase JDBC driver is not guessed as a Maven dependency by this module. Deployments must provide the official
 GBase 8a JDBC driver on the runtime classpath and configure `driver = "com.gbase.jdbc.Driver"`.
 
+### GBase 8s bounded Source
+
+GBase 8s is exposed as the first-class `gbase8s` JDBC dialect. Stage 1 uses the native GBase 8s JDBC protocol and keeps
+normal GBase SQL semantics separate from later SQLMODE compatibility work:
+
+```hocon
+source {
+  type = "jdbc"
+  url = "jdbc:gbasedbt-sqli://gbase8s:9088/app:GBASEDBTSERVER=gbase01;IFX_LOCK_MODE_WAIT=10"
+  driver = "com.gbasedbt.jdbc.Driver"
+  dialect = "gbase8s"
+  schema = "gbasedbt" # optional table owner; defaults to username
+  table_path = "gbasedbt.orders"
+}
+```
+
+The database and `GBASEDBTSERVER` instance identity are connection-level concerns and must be present in the JDBC URL or
+connection properties. One Stage 1 Source connection is bound to the database in its URL. GBase 8s reports table owner
+through the JDBC schema field, so Link-Up models physical tables as `database.owner.table` metadata while SQL inside the
+selected database uses `owner.table`. The normal user-facing paths are `table` and `owner.table`; a three-part
+`database.owner.table` path is accepted only when its database equals the URL database. Cross-database rebinding is not
+performed implicitly.
+
+The read-only `GBase8sCatalog` uses standard JDBC `DatabaseMetaData` for owner, table, column and primary-key discovery.
+If no owner is supplied, the connector uses the explicit `schema` option and then the JDBC username as the default owner.
+When neither gives an owner and the same table name is visible under multiple owners, metadata preparation fails and asks
+for an explicit `owner.table` instead of guessing.
+
+GBase 8s JDBC defaults `DELIMIDENT=n`. In that mode double-quoted SQL identifiers are not valid, so the dialect does not
+blindly quote every table/column name. Ordinary unquoted identifiers are normalized to GBase 8s lowercase behavior. If a
+deployment explicitly enables `DELIMIDENT=y` in the URL or JDBC properties, quoted `table_path` parts preserve case and
+SQL identifiers are emitted with double quotes. This keeps the default path compatible while still allowing deliberate
+case-sensitive database objects.
+
+The Stage 1 type boundary covers common built-ins without exposing GBase JDBC private objects:
+
+- BOOLEAN -> BOOLEAN
+- SMALLINT -> SMALLINT
+- SERIAL / INTEGER / INT -> INT
+- INT8 / SERIAL8 / BIGINT / BIGSERIAL -> BIGINT
+- SMALLFLOAT / REAL -> FLOAT
+- FLOAT / DOUBLE PRECISION -> DOUBLE
+- DEC / DECIMAL / NUMERIC / MONEY -> DECIMAL when precision fits Link-Up
+- DATE -> DATE
+- DATETIME -> TIMESTAMP
+- BYTE / BLOB -> BYTES
+- CHAR / VARCHAR / LVARCHAR / NCHAR / NVARCHAR / TEXT / CLOB -> STRING
+- INTERVAL -> STRING
+- unknown, opaque and extension JDBC types -> STRING
+
+DECIMAL precision above Link-Up's limit falls back to STRING rather than silently truncating numeric precision. INTERVAL
+also stays STRING in this stage because the GBase 8s JDBC driver represents intervals with vendor-specific
+`com.gbasedbt.lang.Interval*` classes. Target type generation remains disabled until the dedicated 8s Sink stage.
+
+The Source supports bounded single-table and multi-table jobs, custom SQL and the shared safe JDBC range partition
+planner. It advertises `BEST_EFFORT` read consistency only. Although GBase 8s provides transactional isolation levels,
+this stage does not claim a coordinated point-in-time snapshot across independent parallel JDBC readers.
+
+Out of scope for this stage: JDBC Sink, WritableCatalog, automatic DDL, SQLMODE MySQL/Oracle compatibility expansion,
+CDC/realtime synchronization, logical-log integration, coordinated snapshots, complex ROW/COLLECTION native objects and
+runtime schema evolution.
+
+The vendor JDBC driver is not guessed as a Maven dependency by this module. Deployments must provide the official GBase
+8s JDBC driver on the runtime classpath and configure `driver = "com.gbasedbt.jdbc.Driver"` (or an older vendor-provided
+compatible driver class when required by that deployment).
+
 ## SAP HANA
 
 SAP HANA is exposed as the `hana` JDBC dialect and is auto-detected from `jdbc:sap://` URLs. Stage 1 is deliberately
