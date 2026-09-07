@@ -4,21 +4,25 @@ import com.link.up.api.source.RecordBatch;
 import com.link.up.api.source.SourceReader;
 import com.link.up.api.table.catalog.CatalogTable;
 import com.link.up.api.table.catalog.TablePath;
+import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.type.FluxRow;
 import com.link.up.connector.file.config.FileFormat;
 import com.link.up.connector.file.config.FileSourceConfig;
+import com.link.up.connector.file.converter.DelimitedRowConverter;
 import com.link.up.connector.file.converter.FileRowConverter;
 import com.link.up.connector.file.converter.FileRowConverters;
 import com.link.up.connector.file.internal.FileStorage;
 import com.link.up.connector.file.internal.FileStorages;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,9 +31,17 @@ import java.util.zip.GZIPInputStream;
 
 /**
  * Reads assigned splits one at a time; a split is a bounded byte range that
- * always starts on a row boundary. Header rows are skipped only in the split
- * starting at offset zero, because every continuation split starts exactly
- * after a row terminator.
+ * always starts on a row boundary.
+ *
+ * <p>Leading lines are skipped only in the split starting at offset zero:
+ * continuation splits start exactly after a row terminator, so skipping again
+ * would silently drop data rows. With {@code header=true} every file's header
+ * row is validated against the discovered schema, because column order in one
+ * file must never silently re-map another file's columns.
+ *
+ * <p>Delimited formats are parsed by the CSV layer, which owns record
+ * boundaries and therefore reads quoted multi-line records correctly; text
+ * and jsonl convert line by line.
  */
 public final class FileSourceReader
         implements SourceReader<FluxRow, FileSourceSplit> {
@@ -37,13 +49,18 @@ public final class FileSourceReader
     private final FileSourceConfig config;
     private final Map<TablePath, CatalogTable> tables;
     private final int batchSize;
+    private final boolean delimitedFormat;
+    private final boolean skipBlankLines;
 
     private FileStorage storage;
-    private FileRowConverter converter;
+    private TableSchema schema;
+    private BufferedReader lineReader;
+    private DelimitedRowConverter delimitedConverter;
+    private Iterator<CSVRecord> recordIterator;
+    private FileRowConverter lineConverter;
     private List<FileSourceSplit> assignedSplits = Collections.emptyList();
     private int nextSplitIndex;
     private FileSourceSplit currentSplit;
-    private BufferedReader lineReader;
     private long splitLocalLine;
     private boolean opened;
     private boolean closed;
@@ -61,6 +78,9 @@ public final class FileSourceReader
         this.tables = Collections.unmodifiableMap(
                 new LinkedHashMap<TablePath, CatalogTable>(tables));
         this.batchSize = batchSize;
+        this.delimitedFormat = config.getFormat() == FileFormat.CSV
+                || config.getFormat() == FileFormat.TSV;
+        this.skipBlankLines = config.getFormat() != FileFormat.TEXT;
     }
 
     @Override
@@ -72,7 +92,17 @@ public final class FileSourceReader
                                 ? Collections.<FileSourceSplit>emptyList()
                                 : splits));
         this.storage = FileStorages.create(config);
-        this.converter = createConverter();
+        CatalogTable table = tables.get(config.getTablePath());
+        if (table == null) {
+            throw new IllegalArgumentException(
+                    "No prepared schema found for the file dataset: " + config.getTableName());
+        }
+        this.schema = table.getTableSchema();
+        if (delimitedFormat) {
+            this.delimitedConverter = FileRowConverters.createDelimited(config, schema);
+        } else {
+            this.lineConverter = FileRowConverters.createLine(config, schema);
+        }
         this.opened = true;
     }
 
@@ -106,24 +136,28 @@ public final class FileSourceReader
 
             List<FluxRow> rows = new ArrayList<FluxRow>(batchSize);
             while (rows.size() < batchSize) {
-                String line;
-                try {
-                    line = lineReader.readLine();
-                } catch (IOException failure) {
-                    throw new IllegalStateException(
-                            "Could not read from " + batchSplit.getFileKey()
-                                    + " at split offset " + batchSplit.getStartOffset(),
-                            failure);
+                if (delimitedFormat) {
+                    CSVRecord record = nextRecord(batchSplit);
+                    if (record == null) {
+                        closeSplit();
+                        break;
+                    }
+                    if (isBlankRecord(record)) {
+                        continue;
+                    }
+                    rows.add(delimitedConverter.convert(record.toList(), rowContext(batchSplit)));
+                } else {
+                    String line = readLineSafe(batchSplit);
+                    if (line == null) {
+                        closeSplit();
+                        break;
+                    }
+                    splitLocalLine++;
+                    if (line.isEmpty() && skipBlankLines) {
+                        continue;
+                    }
+                    rows.add(lineConverter.convert(line, rowContext(batchSplit)));
                 }
-                if (line == null) {
-                    closeSplit();
-                    break;
-                }
-                splitLocalLine++;
-                if (line.isEmpty() && config.getFormat() != FileFormat.TEXT) {
-                    continue;
-                }
-                rows.add(converter.convert(line, rowContext(batchSplit)));
             }
 
             if (!rows.isEmpty()) {
@@ -145,6 +179,7 @@ public final class FileSourceReader
                     failure);
         } finally {
             lineReader = null;
+            recordIterator = null;
             currentSplit = null;
             splitLocalLine = 0;
         }
@@ -180,9 +215,11 @@ public final class FileSourceReader
             throw new IllegalArgumentException(
                     "File split does not belong to the configured dataset: " + split.dataSetId());
         }
-        if (config.isGzipFile(fileNameOf(split.getFileKey())) && split.getStartOffset() != 0) {
+        boolean wholeFile = config.isGzipFile(fileNameOf(split.getFileKey()))
+                || config.getStorageType() == FileSourceConfig.StorageType.SFTP;
+        if (wholeFile && split.getStartOffset() != 0) {
             throw new IllegalStateException(
-                    "A gz file must be planned as one whole-file split, but offset is "
+                    "A whole-file split must start at offset 0, but offset is "
                             + split.getStartOffset() + " for " + split.getFileKey());
         }
 
@@ -199,12 +236,28 @@ public final class FileSourceReader
             this.currentSplit = split;
             this.splitLocalLine = 0;
 
-            long skip = config.isHeader() ? 1L : config.getSkipHeaderRows();
-            for (long i = 0; i < skip; i++) {
-                if (lineReader.readLine() == null) {
-                    break;
+            if (split.getStartOffset() == 0) {
+                if (config.isHeader()) {
+                    String headerLine = lineReader.readLine();
+                    splitLocalLine++;
+                    if (headerLine == null) {
+                        throw new IllegalStateException(
+                                "Header row is missing in " + split.getFileKey());
+                    }
+                    validateHeader(split.getFileKey(), headerLine);
+                } else {
+                    for (long i = 0; i < config.getSkipHeaderRows(); i++) {
+                        if (lineReader.readLine() == null) {
+                            break;
+                        }
+                        splitLocalLine++;
+                    }
                 }
-                splitLocalLine++;
+            }
+
+            if (delimitedFormat) {
+                CSVParser parser = FileRowConverters.delimitedFormat(config).parse(lineReader);
+                this.recordIterator = parser.iterator();
             }
         } catch (IOException failure) {
             throw new IllegalStateException(
@@ -214,13 +267,57 @@ public final class FileSourceReader
         }
     }
 
-    private FileRowConverter createConverter() {
-        CatalogTable table = tables.get(config.getTablePath());
-        if (table == null) {
-            throw new IllegalArgumentException(
-                    "No prepared schema found for the file dataset: " + config.getTableName());
+    /** Column order in every file must match the discovered schema exactly. */
+    private void validateHeader(String fileKey, String headerLine) {
+        List<String> actual = DelimitedRowConverter.parseSingleRecord(
+                FileRowConverters.delimitedFormat(config), headerLine);
+        List<String> trimmed = new ArrayList<String>(actual.size());
+        for (String name : actual) {
+            trimmed.add(name == null ? "" : name.trim());
         }
-        return FileRowConverters.create(config, table.getTableSchema());
+
+        List<String> expected = new ArrayList<String>(schema.getColumnCount());
+        for (int i = 0; i < schema.getColumnCount(); i++) {
+            expected.add(schema.getColumn(i).getName());
+        }
+
+        if (!trimmed.equals(expected)) {
+            throw new IllegalArgumentException(
+                    "Header of " + fileKey + " does not match the discovered schema: expected "
+                            + expected + " but found " + trimmed
+                            + "; align the file or read it as a separate dataset");
+        }
+    }
+
+    private CSVRecord nextRecord(FileSourceSplit split) {
+        try {
+            return recordIterator.hasNext() ? recordIterator.next() : null;
+        } catch (java.io.UncheckedIOException failure) {
+            throw new IllegalStateException(
+                    "Could not read from " + split.getFileKey()
+                            + " at split offset " + split.getStartOffset(),
+                    failure);
+        }
+    }
+
+    private String readLineSafe(FileSourceSplit split) {
+        try {
+            return lineReader.readLine();
+        } catch (IOException failure) {
+            throw new IllegalStateException(
+                    "Could not read from " + split.getFileKey()
+                            + " at split offset " + split.getStartOffset(),
+                    failure);
+        }
+    }
+
+    private static boolean isBlankRecord(CSVRecord record) {
+        for (String value : record) {
+            if (value != null && !value.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String fileNameOf(String fileKey) {

@@ -107,7 +107,7 @@ Option 命名 snake_case,统一带 `withSemanticType` 与 `withScope`,与 MongoS
 | `skip_header_rows` | long | `0` | TASK | 跳过文件前 N 行,仅 csv/tsv/text |
 | `header` | boolean | `false` | TASK | 首行为表头:列名取自首行且该行不输出;与 `schema` 互斥 |
 | `null_value` | string | 无 | TASK | 视为 null 的文本(如 `\N`);不配则空值语义由转换器定义 |
-| `encoding` | string | `UTF-8` | TASK | 显式指定,不做自动探测 |
+| `encoding` | string | `UTF-8` | TASK | 仅允许 ASCII 兼容字符集(UTF-8/GBK/GB18030/Big5 等):字节级行对齐扫描要求 0x0A/0x22 是自包含字节,UTF-16 类构造期直接拒绝 |
 | `compression` | string(none/gz/auto) | `auto` | TASK | auto 按**每个文件**的扩展名识别 gzip(目录可混合);显式 none 遇 .gz 文件在枚举期报错 |
 | `table_name` | string | 由 path 推导 | TASK | dataSetId / 目标逻辑表名 |
 | `split_size` | long(bytes) | `134217728`(128MB) | RUNTIME | 单 split 目标大小,下限 `1048576`(1MB);行对齐可能使实际 split 略大 |
@@ -136,13 +136,13 @@ Option 命名 snake_case,统一带 `withSemanticType` 与 `withScope`,与 MongoS
 
 ```text
 required:   path
-optional:   其余全部
+optional:   其余全部(含 schema 与 header,二者都是可选)
 requiredWhen(storage_type == 's3'): bucket  → 未从 path 解析出时必填
-requiredWhen(format 明确): delimiter 仅 text 生效;quote/escape/header 仅 csv 生效
-exclusive:  schema 与 header 互斥
+requiredWhen(format 明确): delimiter 仅 text 生效;quote/escape 仅 csv 生效
+互斥:      schema 与 header=true 在业务层校验冲突;header=false + schema 合法,因此不能放进 OptionRule 的 exclusive(exclusive 语义是"配置了即互斥",默认值会误伤)
 ```
 
-利用 `OptionRule.Builder.requiredWhen(...)` / `exclusive(...)` 与 `Conditions.equalTo(...)` 表达条件必填与互斥;`access_key`/`secret_key` 声明 `.sensitive()`,错误与日志中不得输出(遵循 CODE_STYLE.md §9)。
+利用 `OptionRule.Builder.requiredWhen(...)` 与 `Conditions.equalTo(...)` 表达条件必填;互斥由 `FileSourceConfig` 构造期判定。`access_key`/`secret_key`/`password` 声明 `.sensitive()`,错误与日志中不得输出(遵循 CODE_STYLE.md §9)。
 
 ### 5.3 FileSourceConfig
 
@@ -208,11 +208,14 @@ close()                 -> 关闭全部剩余资源
 
 正确性细节:
 
-- **表头只跳一次**:`skip_header_rows` 生效时,仅 split 的 `startOffset == 0` 跳过前 N 行;续接 split 从精确行边界开始,天然不含表头。`header=true` 隐含跳过首行,同样只发生在 offset==0 的 split。
+- **表头只跳一次**:仅 `startOffset == 0` 的 split 跳过前 N 行;续接 split 从精确行边界开始,天然不含表头。`header=true` 隐含跳过首行,同样只发生在 offset==0 的 split。
+- **csv/tsv 记录边界由 CSVParser 管理**:引号内嵌换行可以让一条记录横跨多个物理行,Reader 不得按 readLine 逐行解析;表头跳过仍按物理行读取,之后再把流交给 CSVParser。
+- **逐文件表头校验**:`header=true` 时每个文件的表头行都与发现的 schema 逐一比对,列名或顺序不一致立即报错,不允许静默按位置串列。
 - **fields 投影**:在转换器边界应用(与 Mongo `fields` 同构),split/流层面不做列裁剪——文本格式裁列不省 IO,只增加解析分支。
 - **行号语义**:异常消息报告 `fileKey + split 字节起点 + split 内行号`,可唯一定位出错位置;跨 split 的绝对行号需要额外扫描,不在 Source 侧维护。
 - **空文件 / 空目录**:空文件产出 0 个 split;过滤后 path 未匹配到任何文件时在枚举期抛 `TABLE_NOT_EXISTED` 语义错误(见 §9),不静默成功。
 - **压缩按文件判定**:`compression=auto` 时枚举器对每个文件按扩展名识别 gzip 并整文件规划;显式 `none` 遇 `.gz` 文件在枚举期报错。
+- **SFTP 整文件单 split**:SFTP 的 InputStream 变体不支持服务端 seek,按范围读取意味着丢弃偏移字节,大文件下不可接受;因此 SFTP 与 gzip 一样整文件一个 split,顺序读满即止。
 - **batchSize**:沿用框架传入值;单行超过 batch 预期大小不特殊处理,由 `RecordBatch` 语义兜底。
 - 转换器(`converter` 包)把字符串/JSON 值按目标 `TableSchema` 转成 Flux 物理类型,`null_value` 命中的字段转 null;无法安全转换(如非数字文本进 BIGINT 列)时 fail-fast,不做隐式截断,与 ClickHouse/DB2 适配的既有立场一致。
 

@@ -7,6 +7,7 @@ import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
@@ -31,6 +32,36 @@ public class S3FileStorageTest {
     @Before
     public void setUp() {
         client = mock(S3Client.class);
+    }
+
+    @Test
+    public void shouldPreferExactObjectOverPrefixList() {
+        when(client.headObject(any(HeadObjectRequest.class)))
+                .thenReturn(HeadObjectResponse.builder().contentLength(5L).build());
+
+        S3FileStorage storage = new S3FileStorage(client, "bucket");
+        List<FileEntry> files = storage.listFiles("prefix/rows.csv", true);
+
+        assertEquals(1, files.size());
+        assertEquals("prefix/rows.csv", files.get(0).getFileKey());
+        Mockito.verify(client, Mockito.never()).listObjectsV2(any(ListObjectsV2Request.class));
+    }
+
+    @Test
+    public void shouldFallBackToPrefixListWhenExactObjectMissing() {
+        when(client.headObject(any(HeadObjectRequest.class)))
+                .thenThrow(NoSuchKeyException.builder().message("missing").build());
+        when(client.listObjectsV2(any(ListObjectsV2Request.class)))
+                .thenReturn(ListObjectsV2Response.builder()
+                        .isTruncated(false)
+                        .contents(s3Object("prefix/rows.csv", 5))
+                        .build());
+
+        S3FileStorage storage = new S3FileStorage(client, "bucket");
+        List<FileEntry> files = storage.listFiles("prefix/rows.csv", true);
+
+        assertEquals(1, files.size());
+        Mockito.verify(client).listObjectsV2(any(ListObjectsV2Request.class));
     }
 
     @Test

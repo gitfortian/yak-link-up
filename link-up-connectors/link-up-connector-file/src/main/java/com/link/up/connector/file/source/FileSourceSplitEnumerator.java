@@ -62,7 +62,8 @@ public final class FileSourceSplitEnumerator
                     file.getFileKey(),
                     file.getSize(),
                     config.getSplitSize(),
-                    config.isGzipFile(fileNameOf(file.getFileKey())),
+                    config.isGzipFile(fileNameOf(file.getFileKey()))
+                            || config.getStorageType() == FileSourceConfig.StorageType.SFTP,
                     config.getFormat() == FileFormat.CSV,
                     config.getQuoteChar());
             for (FileRowSplitter.FileSplitRange range : ranges) {

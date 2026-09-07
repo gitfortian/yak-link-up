@@ -2,6 +2,7 @@ package com.link.up.connector.file.source;
 
 import com.link.up.api.configuration.ReadonlyConfig;
 import com.link.up.connector.file.config.FileSourceConfig;
+import com.link.up.connector.file.internal.FileEntry;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -97,6 +98,54 @@ public class FileSourceSplitEnumeratorTest {
         // must stay a single whole-file split.
         assertEquals(1, splits.size());
         assertEquals(0L, splits.get(0).getStartOffset());
+    }
+
+    @Test
+    public void shouldPlanWholeFileForSftp() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put("path", "/data");
+        values.put("storage_type", "sftp");
+        values.put("format", "csv");
+        values.put("schema", Collections.singletonList(column("id", "bigint")));
+        values.put("split_size", 1048576L);
+        values.put("host", "10.0.0.1");
+        values.put("user", "sync");
+        values.put("password", "pass");
+        FileSourceConfig config = FileSourceConfig.of(ReadonlyConfig.fromMap(values));
+
+        // Larger than split_size: a seek-capable storage would cut these, but
+        // SFTP ranges discard bytes, so each remote file stays whole.
+        com.link.up.connector.file.internal.FileStorage fake =
+                new com.link.up.connector.file.internal.FileStorage() {
+            @Override
+            public List<FileEntry> listFiles(String basePath, boolean recursive) {
+                return Arrays.asList(
+                        new FileEntry("/data/a.csv", 2L * 1024 * 1024),
+                        new FileEntry("/data/b.csv", 2L * 1024 * 1024));
+            }
+
+            @Override
+            public java.io.InputStream openRange(String fileKey, long start, long length) {
+                throw new UnsupportedOperationException("alignment must not read for whole-file splits");
+            }
+
+            @Override
+            public boolean exists(String fileKey) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+
+        List<FileSourceSplit> splits = new FileSourceSplitEnumerator(config, fake).enumerateSplits();
+
+        assertEquals(2, splits.size());
+        for (FileSourceSplit split : splits) {
+            assertEquals(0L, split.getStartOffset());
+            assertEquals(2L * 1024 * 1024, split.getLength());
+        }
     }
 
     private FileSourceSplitEnumerator enumerator(

@@ -181,6 +181,19 @@ public class FileSourceConfigTest {
     }
 
     @Test
+    public void shouldRejectSplitUnsafeEncoding() {
+        Map<String, Object> values = baseLocalCsv();
+        values.put("encoding", "UTF-16");
+
+        try {
+            FileSourceConfig.of(ReadonlyConfig.fromMap(values));
+            fail("Expected UTF-16 to be rejected for byte-level split alignment");
+        } catch (IllegalArgumentException failure) {
+            assertTrue(failure.getMessage().contains("ASCII-compatible"));
+        }
+    }
+
+    @Test
     public void shouldResolveTextSchemaAsSingleContentColumn() {
         Map<String, Object> values = new LinkedHashMap<String, Object>();
         values.put("path", "data/notes.txt");

@@ -87,6 +87,8 @@ public final class FileSourceFactory
                 .optional(
                         FileSourceOptions.STORAGE_TYPE,
                         FileSourceOptions.FORMAT,
+                        FileSourceOptions.SCHEMA,
+                        FileSourceOptions.HEADER,
                         FileSourceOptions.FIELDS,
                         FileSourceOptions.DELIMITER,
                         FileSourceOptions.QUOTE_CHAR,
@@ -111,7 +113,6 @@ public final class FileSourceFactory
                         FileSourceOptions.PASSWORD,
                         FileSourceOptions.PRIVATE_KEY,
                         FileSourceOptions.STRICT_HOST_KEY_CHECKING)
-                .exclusive(FileSourceOptions.SCHEMA, FileSourceOptions.HEADER)
                 .build();
     }
 

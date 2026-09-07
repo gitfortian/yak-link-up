@@ -15,6 +15,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +48,9 @@ public class FileSourceReaderTest {
         FileSourceReader reader = new FileSourceReader(config, tables(config), 4);
         reader.open(splits);
 
+        String contentText = content.toString();
+        long dataRows = contentText.length() - contentText.replace("\n", "").length() - 1L;
+
         long rows = 0L;
         RecordBatch<FluxRow> batch;
         while (!(batch = reader.readBatch()).isEndOfInput()) {
@@ -56,8 +60,59 @@ public class FileSourceReaderTest {
                 assertTrue("header row leaked into data", id >= 1);
             }
         }
-        assertTrue(rows > 0);
+        assertEquals("continuation splits must not skip rows", dataRows, rows);
         reader.close();
+    }
+
+    @Test
+    public void shouldReadMultilineQuotedCsvRecord() throws Exception {
+        File dir = folder.newFolder("multiline");
+        writeText(new File(dir, "rows.csv"),
+                "id,note\n1,\"multi\nline\"\n2,plain\n");
+
+        FileSourceConfig config = config(dir, null);
+        FileSourceReader reader = new FileSourceReader(config, tables(config), 10);
+        reader.open(new FileSourceSplitEnumerator(config).enumerateSplits());
+
+        RecordBatch<FluxRow> first = reader.readBatch();
+        assertEquals(2, first.size());
+        assertEquals("multi\nline", first.getRecords().get(0).getField(1));
+        assertEquals(2L, first.getRecords().get(1).getField(0));
+        assertEquals(RecordBatch.<FluxRow>endOfInput().isEndOfInput(), reader.readBatch().isEndOfInput());
+        reader.close();
+    }
+
+    @Test
+    public void shouldValidateHeaderPerFile() throws Exception {
+        File dir = folder.newFolder("header");
+        writeText(new File(dir, "a.csv"), "id,name\n1,one\n");
+        writeText(new File(dir, "b.csv"), "name,id\ntwo,2\n");
+
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put("path", dir.getAbsolutePath());
+        values.put("format", "csv");
+        values.put("header", true);
+        values.put("split_size", 1048576L);
+        FileSourceConfig config = FileSourceConfig.of(ReadonlyConfig.fromMap(values));
+        CatalogTable table = FileSchemaResolver.toCatalogTable(
+                config, FileSchemaResolver.fromHeader(Arrays.asList("id", "name")));
+        Map<TablePath, CatalogTable> tables =
+                Collections.singletonMap(config.getTablePath(), table);
+        FileSourceReader reader = new FileSourceReader(config, tables, 10);
+        reader.open(new FileSourceSplitEnumerator(config).enumerateSplits());
+
+        // The first file matches the discovered schema; the second one fails.
+        RecordBatch<FluxRow> first = reader.readBatch();
+        assertEquals(1, first.size());
+
+        try {
+            reader.readBatch();
+            fail("Expected a mismatched header in a later file to fail");
+        } catch (IllegalArgumentException failure) {
+            assertTrue(failure.getMessage().contains("does not match the discovered schema"));
+        } finally {
+            reader.close();
+        }
     }
 
     @Test

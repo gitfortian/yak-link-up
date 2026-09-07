@@ -71,6 +71,20 @@ public final class S3FileStorage implements FileStorage {
             boolean recursive) {
 
         List<FileEntry> files = new ArrayList<FileEntry>();
+        // Exact object wins over prefix listing: "s3://bucket/data" must not
+        // drag in "data2.csv" and friends just because they share the prefix.
+        if (basePath != null && !basePath.isEmpty() && !basePath.endsWith("/")) {
+            try {
+                long size = client.headObject(
+                        HeadObjectRequest.builder().bucket(bucket).key(basePath).build())
+                        .contentLength();
+                files.add(new FileEntry(basePath, size));
+                return files;
+            } catch (NoSuchKeyException missing) {
+                // Not an exact object; treat the path as a prefix below.
+            }
+        }
+
         String prefix = basePath == null || basePath.isEmpty() ? null : basePath;
         String continuationToken = null;
 

@@ -6,6 +6,7 @@ import java.io.Serializable;
 import java.nio.charset.Charset;
 import java.nio.charset.UnsupportedCharsetException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -35,6 +36,14 @@ public final class FileSourceConfig implements Serializable {
 
     private static final long MIN_SPLIT_SIZE = 1048576L;
     private static final long DEFAULT_SPLIT_SIZE = 134217728L;
+
+    /**
+     * Charsets where 0x0A and 0x22 are always single self-contained bytes, so
+     * byte-level row alignment can never cut a character in half.
+     */
+    private static final Set<String> SPLIT_SAFE_ENCODINGS = new HashSet<String>(Arrays.asList(
+            "UTF-8", "US-ASCII", "ISO-8859-1", "ISO-8859-15", "WINDOWS-1252",
+            "GBK", "GB2312", "GB18030", "BIG5", "EUC-JP", "EUC-KR", "SHIFT_JIS"));
 
     private final String path;
     private final StorageType storageType;
@@ -567,6 +576,14 @@ public final class FileSourceConfig implements Serializable {
                 throw new IllegalArgumentException(
                         "Unsupported encoding: " + encodingName,
                         failure);
+            }
+            // Byte-level split alignment scans for 0x0A / 0x22; that is only
+            // sound for ASCII-compatible charsets where those bytes never
+            // appear inside a multi-byte character.
+            if (!SPLIT_SAFE_ENCODINGS.contains(encoding.name().toUpperCase(Locale.ROOT))) {
+                throw new IllegalArgumentException(
+                        "encoding '" + encoding.name() + "' is not supported in this stage: split alignment "
+                                + "requires an ASCII-compatible charset such as UTF-8 or GBK");
             }
 
             String compression = config.get(FileSourceOptions.COMPRESSION)

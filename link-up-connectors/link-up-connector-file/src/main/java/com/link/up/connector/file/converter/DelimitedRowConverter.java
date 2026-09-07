@@ -19,7 +19,7 @@ import java.util.Objects;
  * tsv is parsed without quoting. Row field count must match the declared
  * schema exactly.
  */
-public final class DelimitedRowConverter implements FileRowConverter {
+public final class DelimitedRowConverter {
 
     private final TableSchema schema;
     private final List<Integer> outputIndexes;
@@ -102,17 +102,12 @@ public final class DelimitedRowConverter implements FileRowConverter {
         }
     }
 
-    @Override
-    public FluxRow convert(String line, String rowContext) {
-        List<String> values;
-        try {
-            values = parseSingleRecord(format, line);
-        } catch (RuntimeException failure) {
-            throw new IllegalArgumentException(
-                    "Malformed delimited row " + rowContext + ": " + failure.getMessage(),
-                    failure);
-        }
-
+    /**
+     * Converts one parsed record. The record may span multiple physical lines
+     * (quoted embedded newlines); the reader hands over whatever the
+     * {@link org.apache.commons.csv.CSVParser} assembled.
+     */
+    public FluxRow convert(List<String> values, String rowContext) {
         if (values.size() != schema.getColumnCount()) {
             throw new IllegalArgumentException(
                     "Row " + rowContext + " has " + values.size() + " fields but the schema declares "
