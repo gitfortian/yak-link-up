@@ -17,7 +17,7 @@ import static org.junit.Assert.assertTrue;
 public class GBase8cSchemaCompatibilityTest {
 
     @Test
-    public void detectsA-modeDatePhysicalTimestampCandidateCaseInsensitively() {
+    public void detectsAModeDatePhysicalTimestampCandidateCaseInsensitively() {
         TableSchema source = TableSchema.builder()
                 .columns(Arrays.asList(
                         Column.builder("Business_Date", BasicType.DATE_TYPE).build(),
