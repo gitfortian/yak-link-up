@@ -47,19 +47,20 @@ public final class SqlServerCatalog implements WritableCatalog {
                     + "dc.definition AS COLUMN_DEFAULT, c.is_identity AS IS_IDENTITY, "
                     + "CAST(ep.value AS nvarchar(4000)) AS COLUMN_COMMENT "
                     + "FROM sys.columns c "
-                    + "JOIN sys.tables tb ON c.object_id = tb.object_id "
-                    + "JOIN sys.schemas s ON tb.schema_id = s.schema_id "
+                    + "JOIN sys.objects o ON c.object_id = o.object_id "
+                    + "JOIN sys.schemas s ON o.schema_id = s.schema_id "
                     + "JOIN sys.types t ON c.user_type_id = t.user_type_id "
                     + "LEFT JOIN sys.default_constraints dc ON c.default_object_id = dc.object_id "
                     + "LEFT JOIN sys.extended_properties ep ON ep.major_id = c.object_id "
                     + "AND ep.minor_id = c.column_id AND ep.name = 'MS_Description' "
-                    + "WHERE s.name = ? AND tb.name = ? ORDER BY c.column_id";
+                    + "WHERE o.type IN ('U', 'V') AND s.name = ? AND o.name = ? "
+                    + "ORDER BY c.column_id";
     private static final String SELECT_TABLE_COMMENT_SQL =
             "SELECT CAST(ep.value AS nvarchar(4000)) AS TABLE_COMMENT "
-                    + "FROM sys.tables tb JOIN sys.schemas s ON tb.schema_id=s.schema_id "
-                    + "LEFT JOIN sys.extended_properties ep ON ep.major_id=tb.object_id "
+                    + "FROM sys.objects o JOIN sys.schemas s ON o.schema_id=s.schema_id "
+                    + "LEFT JOIN sys.extended_properties ep ON ep.major_id=o.object_id "
                     + "AND ep.minor_id=0 AND ep.name='MS_Description' "
-                    + "WHERE s.name=? AND tb.name=?";
+                    + "WHERE o.type IN ('U', 'V') AND s.name=? AND o.name=?";
 
     private final String catalogName;
     private final JdbcCatalogConfig config;
@@ -171,7 +172,7 @@ public final class SqlServerCatalog implements WritableCatalog {
         String schema = resolveSchema(schemaName);
         try (Connection connection = connection(targetDatabase);
              ResultSet rs = connection.getMetaData().getTables(
-                     targetDatabase, schema, "%", new String[]{"TABLE"})) {
+                     targetDatabase, schema, "%", readableRelationTypes())) {
             List<TablePath> tables = new ArrayList<TablePath>();
             while (rs.next()) {
                 String table = normalize(rs.getString("TABLE_NAME"));
@@ -186,6 +187,10 @@ public final class SqlServerCatalog implements WritableCatalog {
                     "获取 SQL Server 表列表失败，database=" + targetDatabase
                             + ", schema=" + schema, e);
         }
+    }
+
+    static String[] readableRelationTypes() {
+        return new String[]{"TABLE", "VIEW"};
     }
 
     @Override
