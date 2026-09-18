@@ -2,6 +2,7 @@ package com.link.up.connector.jdbc.catalog;
 
 import com.link.up.api.table.catalog.Catalog;
 import com.link.up.api.table.catalog.CatalogTable;
+import com.link.up.api.table.catalog.Column;
 import com.link.up.api.table.catalog.TablePath;
 import com.link.up.api.table.catalog.TableSchema;
 import com.link.up.api.table.catalog.exception.CatalogException;
@@ -19,15 +20,12 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Loads JDBC Source table metadata for the catalog/source planning boundary.
@@ -117,15 +115,24 @@ public final class JdbcCatalogUtils {
             throws Exception {
 
         TablePath tablePath = parseTablePath(tableConfig, dialect);
-        CatalogTable catalogTable = catalog.getTable(tablePath);
+        CatalogTable catalogTable;
 
         if (tableConfig.hasCustomQuery()) {
+            /*
+             * Custom SQL describes a logical dataset, not necessarily one physical table.
+             *
+             * Yak Ops uses table_path (for example yak_query.<job>) as the stable
+             * dataset id for routing. The query itself is the schema source, so do
+             * not resolve the logical path through Catalog#getTable.
+             */
             catalogTable =
-                    projectCatalogTableByQuery(
+                    discoverCatalogTableByQuery(
                             sourceConfig.getConnectionConfig(),
                             dialect,
-                            catalogTable,
+                            tablePath,
                             tableConfig.getQuery());
+        } else {
+            catalogTable = catalog.getTable(tablePath);
         }
 
         return JdbcSourceTable.builder()
@@ -155,37 +162,35 @@ public final class JdbcCatalogUtils {
         return parsed;
     }
 
-    private static CatalogTable projectCatalogTableByQuery(
+    private static CatalogTable discoverCatalogTableByQuery(
             JdbcConnectionConfig connectionConfig,
             JdbcDialect dialect,
-            CatalogTable physicalTable,
+            TablePath logicalTablePath,
             String query)
             throws Exception {
 
         validateQuery(query);
-        List<String> queryFields = readQueryFields(connectionConfig, dialect, query);
+        List<Column> queryColumns =
+                readQueryColumns(connectionConfig, dialect, query);
 
-        if (queryFields.isEmpty()) {
+        if (queryColumns.isEmpty()) {
             throw new IllegalArgumentException(
                     "Cannot discover custom query fields, table="
-                            + physicalTable.getTablePath());
+                            + logicalTablePath);
         }
 
-        TableSchema physicalSchema = physicalTable.getTableSchema();
-        for (String fieldName : queryFields) {
-            if (!physicalSchema.contains(fieldName)) {
-                throw new IllegalArgumentException(
-                        "Custom query field does not belong to physical table; aliases/expressions are not supported, table="
-                                + physicalTable.getTablePath()
-                                + ", field="
-                                + fieldName);
-            }
-        }
+        TableSchema querySchema =
+                TableSchema.builder()
+                        .columns(queryColumns)
+                        .build();
 
-        return physicalTable.withSchema(physicalSchema.project(queryFields));
+        return CatalogTable.builder(
+                        logicalTablePath,
+                        querySchema)
+                .build();
     }
 
-    private static List<String> readQueryFields(
+    private static List<Column> readQueryColumns(
             JdbcConnectionConfig config,
             JdbcDialect dialect,
             String query)
@@ -211,7 +216,7 @@ public final class JdbcCatalogUtils {
                 }
 
                 if (metadata != null) {
-                    return readFieldNames(metadata);
+                    return dialect.typeMapper().map(metadata);
                 }
 
                 if (query.indexOf('?') >= 0) {
@@ -222,7 +227,7 @@ public final class JdbcCatalogUtils {
 
                 statement.setMaxRows(1);
                 try (ResultSet resultSet = statement.executeQuery()) {
-                    return readFieldNames(resultSet.getMetaData());
+                    return dialect.typeMapper().map(resultSet.getMetaData());
                 }
             }
         } catch (SQLException e) {
@@ -231,33 +236,6 @@ public final class JdbcCatalogUtils {
                             + abbreviate(query, 300),
                     e);
         }
-    }
-
-    private static List<String> readFieldNames(
-            ResultSetMetaData metadata)
-            throws SQLException {
-
-        int columnCount = metadata.getColumnCount();
-        List<String> fields = new ArrayList<String>(columnCount);
-        Set<String> uniqueFields = new HashSet<String>();
-
-        for (int i = 1; i <= columnCount; i++) {
-            String fieldName = normalize(metadata.getColumnLabel(i));
-            if (fieldName == null) {
-                fieldName = normalize(metadata.getColumnName(i));
-            }
-            if (fieldName == null) {
-                throw new IllegalArgumentException(
-                        "Query result column " + i + " has no name");
-            }
-            if (!uniqueFields.add(fieldName)) {
-                throw new IllegalArgumentException(
-                        "Query result contains duplicate field: " + fieldName);
-            }
-            fields.add(fieldName);
-        }
-
-        return fields;
     }
 
     private static void validateQuery(String query) {
