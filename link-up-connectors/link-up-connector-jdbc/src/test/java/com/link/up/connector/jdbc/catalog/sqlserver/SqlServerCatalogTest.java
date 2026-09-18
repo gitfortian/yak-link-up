@@ -7,6 +7,7 @@ import org.junit.Test;
 import java.util.Collections;
 import java.util.Properties;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 
@@ -31,6 +32,13 @@ public class SqlServerCatalogTest {
     public void sqlServerPropertiesAreNotPollutedByMysqlOptions() {
         Properties properties = config().toConnectionProperties();
         assertFalse(properties.containsKey("tinyInt1isBit"));
+    }
+
+    @Test
+    public void sourceDiscoveryIncludesTablesAndViews() {
+        assertArrayEquals(
+                new String[]{"TABLE", "VIEW"},
+                SqlServerCatalog.readableRelationTypes());
     }
 
     private static JdbcCatalogConfig config() {
